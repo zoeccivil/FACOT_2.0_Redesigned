@@ -73,8 +73,56 @@ class QuotationHistoryTab(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Historial de Cotizaciones"))
-        # add actions column
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        # Title
+        title_label = QLabel("Historial de Cotizaciones")
+        title_label.setProperty("heading", True)
+        layout.addWidget(title_label)
+        
+        # Filter row (initially visible)
+        from PyQt6.QtWidgets import QDateEdit, QLineEdit
+        from PyQt6.QtCore import QDate
+        
+        self.filter_widget = QWidget()
+        self.filter_widget.setProperty("filterRow", True)
+        filter_layout = QHBoxLayout(self.filter_widget)
+        filter_layout.setContentsMargins(12, 8, 12, 8)
+        
+        # Date range filters
+        filter_layout.addWidget(QLabel("Desde:"))
+        self.filter_date_from = QDateEdit()
+        self.filter_date_from.setCalendarPopup(True)
+        self.filter_date_from.setDate(QDate.currentDate().addMonths(-1))
+        self.filter_date_from.dateChanged.connect(self.refresh)
+        filter_layout.addWidget(self.filter_date_from)
+        
+        filter_layout.addWidget(QLabel("Hasta:"))
+        self.filter_date_to = QDateEdit()
+        self.filter_date_to.setCalendarPopup(True)
+        self.filter_date_to.setDate(QDate.currentDate())
+        self.filter_date_to.dateChanged.connect(self.refresh)
+        filter_layout.addWidget(self.filter_date_to)
+        
+        # Client filter
+        filter_layout.addWidget(QLabel("Cliente:"))
+        self.filter_client = QLineEdit()
+        self.filter_client.setPlaceholderText("Buscar por nombre...")
+        self.filter_client.textChanged.connect(self.refresh)
+        filter_layout.addWidget(self.filter_client)
+        
+        filter_layout.addStretch(1)
+        
+        # Clear filters button
+        btn_clear_filters = QPushButton("Limpiar filtros")
+        btn_clear_filters.setProperty("flat", True)
+        btn_clear_filters.clicked.connect(self._clear_filters)
+        filter_layout.addWidget(btn_clear_filters)
+        
+        layout.addWidget(self.filter_widget)
+        
+        # Table - add actions column
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(["ID", "Fecha", "Cliente", "RNC", "Moneda", "Total", "Notas", "Acciones"])
         header = self.table.horizontalHeader()
@@ -83,15 +131,30 @@ class QuotationHistoryTab(QWidget):
             header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
         actions_col = self.table.columnCount() - 1
         header.setSectionResizeMode(actions_col, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(actions_col, 200)
+        self.table.setColumnWidth(actions_col, 240)  # Increased width
 
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
         layout.addWidget(self.table)
+        
+        # Refresh button
         btn_refresh = QPushButton("Refrescar Historial")
         btn_refresh.clicked.connect(self.refresh)
         layout.addWidget(btn_refresh)
+    
+    def _clear_filters(self):
+        """Clear all filters and refresh"""
+        from PyQt6.QtCore import QDate
+        self.filter_date_from.setDate(QDate.currentDate().addMonths(-1))
+        self.filter_date_to.setDate(QDate.currentDate())
+        self.filter_client.clear()
+        self.refresh()
+    
+    def toggle_filters(self):
+        """Toggle filter visibility"""
+        if hasattr(self, 'filter_widget'):
+            self.filter_widget.setVisible(not self.filter_widget.isVisible())
 
     def refresh(self):
         company = self.get_current_company()

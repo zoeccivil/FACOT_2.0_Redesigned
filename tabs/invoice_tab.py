@@ -92,14 +92,18 @@ class InvoiceTab(QWidget):
     # -------------------------
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # Top action row
+        # Top action row - moved to topbar in MainWindow, keep minimal controls here
         top_btn_row = QHBoxLayout()
         self.edit_template_btn = QPushButton("Editar plantilla")
+        self.edit_template_btn.setProperty("flat", True)
         self.edit_template_btn.clicked.connect(self._on_edit_template)
         top_btn_row.addWidget(self.edit_template_btn)
 
         self.edit_company_btn = QPushButton("Editar empresa")
+        self.edit_company_btn.setProperty("flat", True)
         self.edit_company_btn.clicked.connect(self._open_company_manager)
         top_btn_row.addWidget(self.edit_company_btn)
 
@@ -112,10 +116,10 @@ class InvoiceTab(QWidget):
         layout.addLayout(top_btn_row)
 
         # COMBINED BLOCK: Datos de Factura + Datos del Cliente (compact)
-        datos_cliente_box = QGroupBox("1. Datos de la Factura  ·  Datos del Cliente")
+        datos_cliente_box = QGroupBox("Información de la Factura")
         g = QGridLayout(datos_cliente_box)
-        g.setHorizontalSpacing(8)
-        g.setVerticalSpacing(6)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(10)
 
         # NCF asignado (read-only for user, programmatically writable)
         self.ncf_number_edit = QLineEdit()
@@ -161,6 +165,7 @@ class InvoiceTab(QWidget):
 
         # refresh preview NCF button (small)
         self.btn_refresh_ncf = QPushButton("↻"); self.btn_refresh_ncf.setToolTip("Mostrar el próximo NCF (preview)")
+        self.btn_refresh_ncf.setProperty("flat", True)
         self.btn_refresh_ncf.clicked.connect(self._update_ncf_sequence)
 
         # Row 0: NCF | Refresh | Tipo Factura | Fecha | Vencimiento
@@ -195,7 +200,7 @@ class InvoiceTab(QWidget):
         self.currency_combo.currentIndexChanged.connect(self._on_currency_change)
 
         # 2. Detalles de la Factura (tabla) — includes Totals inline
-        detalles_box = QGroupBox("2. Detalles de la Factura")
+        detalles_box = QGroupBox("Ítems de la Factura")
         detalles_layout = QVBoxLayout(detalles_box)
 
         actions = QHBoxLayout()
@@ -209,26 +214,44 @@ class InvoiceTab(QWidget):
         self.invoice_items_table.setHorizontalHeaderLabels(["#", "Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"])
         self.invoice_items_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.invoice_items_table.verticalHeader().setVisible(False)
+        self.invoice_items_table.setAlternatingRowColors(True)
         detalles_layout.addWidget(self.invoice_items_table)
 
-        # Totals inline inside detalles block (compact right-aligned)
-        totals_row = QHBoxLayout()
+        # Totals section - sticky style
+        totals_widget = QWidget()
+        totals_widget.setObjectName("totalsSection")
+        totals_widget.setProperty("totalsSection", True)
+        totals_row = QHBoxLayout(totals_widget)
+        totals_row.setContentsMargins(16, 12, 16, 12)
         totals_row.addStretch(1)
-        self.apply_itbis_checkbox = QCheckBox("Aplicar ITBIS (18%)"); self.apply_itbis_checkbox.setChecked(True)
+        
+        self.apply_itbis_checkbox = QCheckBox("Aplicar ITBIS (18%)")
+        self.apply_itbis_checkbox.setChecked(True)
         self.apply_itbis_checkbox.stateChanged.connect(self._recalculate_invoice_totals)
+        
         self.subtotal_label = QLabel("Subtotal: RD$ 0.00")
+        self.subtotal_label.setProperty("muted", True)
+        
         self.itbis_label = QLabel("ITBIS: RD$ 0.00")
+        self.itbis_label.setProperty("muted", True)
+        
         self.total_label = QLabel("Total: RD$ 0.00")
+        self.total_label.setProperty("totalAmount", True)
+        from PyQt6.QtGui import QFont
+        total_font = QFont()
+        total_font.setPointSize(12)
+        total_font.setBold(True)
+        self.total_label.setFont(total_font)
 
         totals_row.addWidget(self.apply_itbis_checkbox)
-        totals_row.addSpacing(12)
+        totals_row.addSpacing(20)
         totals_row.addWidget(self.subtotal_label)
-        totals_row.addSpacing(8)
+        totals_row.addSpacing(12)
         totals_row.addWidget(self.itbis_label)
-        totals_row.addSpacing(8)
+        totals_row.addSpacing(12)
         totals_row.addWidget(self.total_label)
 
-        detalles_layout.addLayout(totals_row)
+        detalles_layout.addWidget(totals_widget)
         layout.addWidget(detalles_box)
 
         # Footer action buttons (kept simple)

@@ -76,20 +76,16 @@ class QuotationTab(QWidget, ItemsLookupMixin):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        self.setStyleSheet("""
-        QGroupBox {
-            border: 1px solid #555; border-radius: 6px; margin-top: 10px;
-            padding: 8px 10px;
-        }
-        QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
-        """)
+        # Removed inline styles - now using centralized QSS
 
         # 1. Datos de la Cotización + Datos del Cliente (unificado)
-        datos_cliente_box = QGroupBox("1. Datos de la Cotización  ·  Datos del Cliente")
+        datos_cliente_box = QGroupBox("Información de la Cotización")
         g = QGridLayout(datos_cliente_box)
-        g.setHorizontalSpacing(8)
-        g.setVerticalSpacing(6)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(10)
 
         # Fecha
         self.quotation_date = QDateEdit(QDate.currentDate()); self.quotation_date.setCalendarPopup(True)
@@ -177,24 +173,44 @@ class QuotationTab(QWidget, ItemsLookupMixin):
         self.quotation_items_table.setHorizontalHeaderLabels(["#", "Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"])
         self.quotation_items_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.quotation_items_table.verticalHeader().setVisible(False)
+        self.quotation_items_table.setAlternatingRowColors(True)
         detalles_layout.addWidget(self.quotation_items_table)
 
-        totals_row = QHBoxLayout()
+        # Totals section - sticky style
+        totals_widget = QWidget()
+        totals_widget.setObjectName("totalsSection")
+        totals_widget.setProperty("totalsSection", True)
+        totals_row = QHBoxLayout(totals_widget)
+        totals_row.setContentsMargins(16, 12, 16, 12)
         totals_row.addStretch(1)
+        
         self.apply_itbis_checkbox = QCheckBox("Aplicar ITBIS (18%)")
         self.apply_itbis_checkbox.setChecked(True)
         self.apply_itbis_checkbox.stateChanged.connect(self._recalculate_totals)
+        
         self.quotation_subtotal_label = QLabel("Subtotal: RD$ 0.00")
+        self.quotation_subtotal_label.setProperty("muted", True)
+        
         self.quotation_itbis_label = QLabel("ITBIS: RD$ 0.00")
+        self.quotation_itbis_label.setProperty("muted", True)
+        
         self.quotation_total_label = QLabel("Total: RD$ 0.00")
+        self.quotation_total_label.setProperty("totalAmount", True)
+        from PyQt6.QtGui import QFont
+        total_font = QFont()
+        total_font.setPointSize(12)
+        total_font.setBold(True)
+        self.quotation_total_label.setFont(total_font)
+        
         totals_row.addWidget(self.apply_itbis_checkbox)
-        totals_row.addSpacing(12)
+        totals_row.addSpacing(20)
         totals_row.addWidget(self.quotation_subtotal_label)
-        totals_row.addSpacing(8)
+        totals_row.addSpacing(12)
         totals_row.addWidget(self.quotation_itbis_label)
-        totals_row.addSpacing(8)
+        totals_row.addSpacing(12)
         totals_row.addWidget(self.quotation_total_label)
-        detalles_layout.addLayout(totals_row)
+        
+        detalles_layout.addWidget(totals_widget)
 
         layout.addWidget(detalles_box)
 
