@@ -404,7 +404,7 @@ class MigrationDialog(QDialog):
         
         self.start_btn = QPushButton("Iniciar Migración")
         self.start_btn.clicked.connect(self._start_migration)
-        self.start_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; padding: 8px 16px; }")
+        self.start_btn.setProperty("success", True)
         button_layout.addWidget(self.start_btn)
         
         self.cancel_btn = QPushButton("Cancelar")

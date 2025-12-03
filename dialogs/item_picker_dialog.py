@@ -203,13 +203,7 @@ class ItemPickerDialog(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        self.setStyleSheet("""
-        QGroupBox {
-            border: 1px solid #555; border-radius: 6px; margin-top: 8px; 
-            padding: 8px; 
-        }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-        """)
+        # Removed inline styles - using centralized QSS
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
