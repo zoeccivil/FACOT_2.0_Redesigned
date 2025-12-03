@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyQt
+*.ui.autosave
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.backup.*
+
+# Logs
+*.log
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+
+# Build artifacts
+*.spec.bak
+build_exe.bat.bak
+
+# Output files (generated PDFs/Excel)
+output/
+*.pdf
+*.xlsx
+!plantilla_items.xlsx
+
+# Local config (user-specific paths)
+facot_config.json
+
+# Debug files
+debug_*.html
+
+# Test coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# Firebase credentials (NEVER commit these!)
+firebase-credentials.json
+*-firebase-adminsdk-*.json
+service-account*.json
+
+# Backups directory (local backups data, not source code)
+/backups/
+
+# Local settings (may contain sensitive paths)
+local_settings.json
+
+firebase-credentials.json
+*.secret.json
+*.key.json
+*.service.json
