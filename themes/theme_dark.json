@@ -3,17 +3,37 @@
   "name": "Dark Focus",
   "palette": {
     "background": "#1E1E2E",
+
     "surface": "#252538",
     "surface_alt": "#181825",
+    "surface-alt": "#181825",
+
     "foreground": "#CDD6F4",
     "foreground_muted": "#A6ADC8",
+    "foreground-muted": "#A6ADC8",
+
     "primary": "#89B4FA",
     "primary_hover": "#74C7EC",
+    "primary-hover": "#74C7EC",
     "primary_text": "#1E1E2E",
+    "primary-text": "#1E1E2E",
+
+    "accent": "#74C7EC",
+
     "border": "#313244",
+
     "table_header_bg": "#181825",
+    "table-header-bg": "#181825",
     "table_grid": "#313244",
+    "table-grid": "#313244",
+
     "selection_bg": "#45475A",
-    "selection_text": "#FFFFFF"
+    "selection-bg": "#45475A",
+    "selection_text": "#FFFFFF",
+    "selection-text": "#FFFFFF",
+
+    "success": "#30D158",
+    "warning": "#F5C242",
+    "error": "#FF5B5B"
   }
 }

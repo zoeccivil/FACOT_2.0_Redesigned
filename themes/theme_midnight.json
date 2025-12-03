@@ -4,19 +4,51 @@
   "palette": {
     "background": "#0F1115",
     "surface": "#1A1D23",
-    "surface-alt": "#11161F",
+    "surface_alt": "#252932",
+    "surface-alt": "#252932",
+
+    "sidebar_bg": "#11161F",
+    "sidebar_fg": "#9FA4AD",
+
     "foreground": "#E6E6E6",
-    "foreground-muted": "#9FA4AD",
+    "foreground_muted": "#A0A8B8",
+    "foreground-muted": "#A0A8B8",
+
     "primary": "#3A8DFF",
+    "primary_hover": "#2E77E6",
+    "primary-hover": "#2E77E6",
+    "primary_text": "#FFFFFF",
+    "primary-text": "#FFFFFF",
+
     "accent": "#4DF2FF",
+
     "border": "#2A2F36",
+
+    "input_bg": "#161920",
+    "input_border": "#4B5563", 
+    "popup_bg": "#1A1D23",
+    "popup_text": "#E6E6E6",
+
+    "table_header_bg": "#1A1D23",
+    "table-header-bg": "#1A1D23",
+    "table_grid": "#2A2F36",
+    "table-grid": "#2A2F36",
+
+    "calendar_bg": "#1A1D23",
+    "calendar_nav_bg": "#11161F",
+    "calendar_text": "#E6E6E6",
+
+    "selection_bg": "#3A8DFF",
+    "selection-bg": "#3A8DFF",
+    "selection_text": "#FFFFFF",
+    "selection-text": "#FFFFFF",
+
     "success": "#30D158",
     "warning": "#F5C242",
-    "error": "#FF5B5B"
+    "error": "#FF5B5B",
+
+    "icon_arrow": "url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik03LjQxIDguNTlMMTIgMTMuMTdsNC41OS00LjU4TDE4IDEwbC02IDYtNi02IDEuNDEtMS40MXoiLz48L3N2Zz4=)",
+    "icon_calendar": "url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0xOSAzaC0xVjFoLTJ2Mkg4VjFGNnYySDNjLTEuMTEgMC0xLjk5Ljg5LTEuOTkgMkwxIDE5YzAgMS4xLjg5IDIgMiAyaDE2YzEuMSAwIDItLjkgMi0yVzVjMC0xLjEtLjktMi0yLTJ6bTAgMTZIM1Y4aDE2djExem0wLTEzSDNWNWg1djFoMnYtMWg1djFoMnYtMWg1djJ6bS0yIDRoLTJ2Mmgydi0yem0tNCAwaC0ydjJoMnYtMnptLTQgMGgtMnYyaDJ2LTJ6bS00IDRoMnYyaC0ydi0yem00IDBoMnYyaC0ydi0yem00IDBoMnYyaC0ydi0yeiIvPjwvc3ZnPg==)"
   },
-  "metadata": {
-    "type": "dark",
-    "version": "1.0",
-    "designer": "ChatGPT FACOT Redesign"
-  }
+  "metadata": { "type": "dark" }
 }

@@ -26,7 +26,7 @@ QLineEdit#infoField:focus,
 QDateEdit#infoField:focus,
 QComboBox#infoField:focus,
 QLineEdit#infoFieldSmall:focus {
-    outline: 1px solid rgba(0,0,0,0.06); /* adjust for light/dark variants if needed */
+    outline: 1px solid rgba(0,0,0,0.06);
     border-radius: 4px;
 }
 

@@ -69,6 +69,10 @@ def _ensure_facot_config_loaded(app: QApplication) -> None:
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("FACOT 2.0")
+    app.setOrganizationName("ZOEC CIVIL SRL")
+
+
 
     _ensure_facot_config_loaded(app)
 

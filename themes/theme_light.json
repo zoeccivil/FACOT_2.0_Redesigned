@@ -5,15 +5,49 @@
     "background": "#F1F5F9",
     "surface": "#FFFFFF",
     "surface_alt": "#F8FAFC",
+    "surface-alt": "#F8FAFC",
+
+    "sidebar_bg": "#FFFFFF",
+    "sidebar_fg": "#475569",
+
     "foreground": "#0F172A",
     "foreground_muted": "#64748B",
+    "foreground-muted": "#64748B",
+
     "primary": "#2563EB",
     "primary_hover": "#1D4ED8",
+    "primary-hover": "#1D4ED8",
     "primary_text": "#FFFFFF",
-    "border": "#E2E8F0",
-    "table_header_bg": "#F8FAFC",
+    "primary-text": "#FFFFFF",
+
+    "accent": "#0EA5E9",
+
+    "border": "#CBD5E1",
+    
+    "input_bg": "#FFFFFF",
+    "input_border": "#94A3B8", 
+    "popup_bg": "#FFFFFF",
+    "popup_text": "#0F172A",
+
+    "table_header_bg": "#F1F5F9",
+    "table-header-bg": "#F1F5F9",
     "table_grid": "#E2E8F0",
+    "table-grid": "#E2E8F0",
+
+    "calendar_bg": "#FFFFFF",
+    "calendar_nav_bg": "#F1F5F9",
+    "calendar_text": "#0F172A",
+
     "selection_bg": "#DBEAFE",
-    "selection_text": "#1E40AF"
+    "selection-bg": "#DBEAFE",
+    "selection_text": "#1E40AF",
+    "selection-text": "#1E40AF",
+
+    "success": "#16A34A",
+    "warning": "#F59E0B",
+    "error": "#EF4444",
+
+    "icon_arrow": "url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzMzMzMzMyI+PHBhdGggZD0iTTcuNDEgOC41OUwxMiAxMy4xN2w0LjU5LTQuNThMMTggMTBsLTYgNi02LTYgMS40MS0xLjQxeiIvPjwvc3ZnPg==)",
+    "icon_calendar": "url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzMzMzMzMyI+PHBhdGggZD0iTTE5IDNoLTFWMWgtMnYySDhWMUg2djJLM2MtMS4xMSAwLTEuOTkuODktMS45OSAyTDEgMTljMCAxLjEuODkgMiAyIDJoMTZjMS4xIDAgMi0uOSAyLTJdNWMwLTEuMS0uOS0yLTItMnpNmAgMTZIM1Y4aDE2djExem0wLTEzSDNWNWg1djFoMnYtMWg1djFoMnYtMWg1djJ6bS0yIDRoLTJ2Mmgydi0yem0tNCAwaC0ydjJoMnYtMnptLTQgMGgtMnYyaDJ2LTJ6bS00IDRoMnYyaC0ydi0yem00IDBoMnYyaC0ydi0yem00IDBoMnYyaC0ydi0yeiIvPjwvc3ZnPg==)"
   }
 }
