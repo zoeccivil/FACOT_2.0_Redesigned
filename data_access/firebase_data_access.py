@@ -1,10 +1,3 @@
-"""
-Implementación de DataAccess para Firebase (Firestore).
-
-Proporciona acceso a datos usando Firestore como backend,
-con soporte para multi-usuario y company_id scoping.
-"""
-
 from __future__ import annotations
 import os
 from typing import List, Dict, Any, Optional
@@ -17,20 +10,15 @@ from firebase import get_firebase_client
 class FirebaseDataAccess(DataAccess):
     """
     Implementación de DataAccess usando Firebase Firestore.
-    
-    Estructura de colecciones:
-    - companies/{company_id}
-    - items/{item_id}
-    - third_parties/{third_party_id}
-    - invoices/{invoice_id} con subcol items
-    - quotations/{quotation_id} con subcol items
-    - sequences/{company_id}_ncf/{ncf_type}
+
+    Nota: Este archivo incluye métodos adicionales para persistir
+    vencimiento fijo de facturas por empresa en la colección 'sequences'.
     """
-    
+
     def __init__(self, user_id: Optional[str] = None):
         """
         Inicializa con cliente Firebase.
-        
+
         Args:
             user_id: ID del usuario actual (para created_by/updated_by)
         """
@@ -38,157 +26,254 @@ class FirebaseDataAccess(DataAccess):
         self.db = self.client.get_firestore()
         self.storage = self.client.get_storage()
         self.user_id = user_id or "system"
-        
+
         if not self.db:
             raise RuntimeError("Firestore no está disponible. Verificar configuración de Firebase.")
-    
+
     def _add_metadata(self, data: Dict[str, Any], is_update: bool = False) -> Dict[str, Any]:
         """Agrega metadatos de auditoría a un documento."""
         now = datetime.utcnow().isoformat()
-        
+
         if not is_update:
             data['created_at'] = now
             data['created_by'] = self.user_id
-        
+
         data['updated_at'] = now
         data['updated_by'] = self.user_id
-        
+
         return data
     
     # ===== EMPRESAS (COMPANIES) =====
-    
+
     def get_all_companies(self) -> List[Dict[str, Any]]:
         """Obtiene todas las empresas."""
         try:
             companies_ref = self.db.collection('companies')
             docs = companies_ref.stream()
-            
+
             companies = []
             for doc in docs:
-                company_data = doc.to_dict()
-                company_data['id'] = int(doc.id) if doc.id.isdigit() else doc.id
+                company_data = doc.to_dict() or {}
+                company_data['id'] = int(doc.id) if str(doc.id).isdigit() else doc.id
                 companies.append(company_data)
-            
+
             return companies
         except Exception as e:
             print(f"[FIREBASE] Error getting companies: {e}")
             return []
-    
+
     def get_company_details(self, company_id: int) -> Optional[Dict[str, Any]]:
         """Obtiene detalles completos de una empresa."""
         try:
             doc_ref = self.db.collection('companies').document(str(company_id))
             doc = doc_ref.get()
-            
+
             if doc.exists:
-                company_data = doc.to_dict()
+                company_data = doc.to_dict() or {}
                 company_data['id'] = company_id
                 return company_data
-            
+
             return None
         except Exception as e:
             print(f"[FIREBASE] Error getting company {company_id}: {e}")
             return None
-    
+
     def add_company(self, name: str, rnc: str, address: str = "") -> int:
         """Agrega una nueva empresa. Retorna el ID."""
         try:
-            # Generar ID auto-incrementable
-            # En Firestore, usamos timestamp + random para evitar colisiones
+            # Generar ID tipo timestamp (compatible con implementacion previa)
             import time
             company_id = int(time.time() * 1000) % 1000000
-            
+
             company_data = {
                 'name': name,
                 'rnc': rnc,
                 'address': address,
             }
             company_data = self._add_metadata(company_data)
-            
+
             doc_ref = self.db.collection('companies').document(str(company_id))
             doc_ref.set(company_data)
-            
+
             return company_id
         except Exception as e:
             print(f"[FIREBASE] Error adding company: {e}")
             raise
-    
-    def update_company_fields(self, company_id: int, fields: Dict[str, Any]) -> None:
-        """Actualiza campos específicos de una empresa."""
+
+
+    # -------------------------
+    # Persistencia de vencimiento de facturas (company-level)
+    # -------------------------
+    def set_company_due_date(self, company_id: int, due_date: str) -> bool:
+        """
+        Persiste el vencimiento fijo de facturas para una empresa en Firestore.
+
+        Strategy:
+          - Guardamos en la colección 'sequences' como documento '<company_id>_meta'
+            con campo 'invoice_due_date': "<YYYY-MM-DD>" o "" para vaciar.
+
+        Args:
+            company_id: ID de la empresa
+            due_date: cadena 'YYYY-MM-DD' o '' para limpiar
+
+        Returns:
+            True si se guardó correctamente, False en caso contrario.
+        """
         try:
-            fields = self._add_metadata(fields, is_update=True)
-            
-            doc_ref = self.db.collection('companies').document(str(company_id))
-            doc_ref.update(fields)
+            doc_id = f"{company_id}_meta"
+            doc_ref = self.db.collection("sequences").document(doc_id)
+            # Usar merge para no borrar otros campos
+            doc_ref.set({"invoice_due_date": due_date}, merge=True)
+            return True
         except Exception as e:
-            print(f"[FIREBASE] Error updating company {company_id}: {e}")
+            print(f"[FIREBASE] Error setting company due date for {company_id}: {e}")
+            return False
+
+    def get_company_due_date(self, company_id: int) -> str:
+        """
+        Lee el vencimiento fijo de facturas para una empresa desde Firestore
+        (colección 'sequences', doc '<company_id>_meta', campo 'invoice_due_date').
+
+        Returns:
+            Cadena con fecha 'YYYY-MM-DD' o '' si no existe.
+        """
+        try:
+            doc_id = f"{company_id}_meta"
+            doc_ref = self.db.collection("sequences").document(doc_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return ""
+            data = doc.to_dict() or {}
+            return data.get("invoice_due_date", "") or ""
+        except Exception as e:
+            print(f"[FIREBASE] Error getting company due date for {company_id}: {e}")
+            return ""
+
+    # -------------------------
+    # Compat/Hooks: mantener compatibilidad con set_company_field/update_company_fields
+    # -------------------------
+    def set_company_field(self, company_id: int, key: str, value: Any) -> None:
+        """
+        Sobrescribir o ampliar para que, si el campo es 'invoice_due_date',
+        se almacene en sequences/<company>_meta para centralizar la configuración.
+        Para otros campos, intentar actualizar el documento companies/{company_id}.
+        """
+        try:
+            if key == "invoice_due_date":
+                ok = self.set_company_due_date(int(company_id), str(value or ""))
+                if not ok:
+                    raise RuntimeError("No se pudo persistir invoice_due_date en sequences.")
+                return
+
+            # Intentar actualizar en companies doc por defecto
+            doc_ref = self.db.collection("companies").document(str(company_id))
+            doc_ref.update({key: value})
+        except Exception as e:
+            # Re-raise para que UI maneje el error si lo desea
+            print(f"[FIREBASE] set_company_field error for {company_id}.{key}: {e}")
+            raise
+
+    def update_company_fields(self, company_id: int, fields: Dict[str, Any]) -> None:
+        """
+        Actualiza múltiples campos de la empresa.
+        Si fields contiene 'invoice_due_date', lo persistimos en sequences/*_meta.
+        El resto se aplica al documento companies/{company_id}.
+        """
+        if not fields:
+            return
+        fields_copy = dict(fields)
+        try:
+            # Manejar invoice_due_date por separado
+            if "invoice_due_date" in fields_copy:
+                try:
+                    self.set_company_due_date(int(company_id), str(fields_copy.pop("invoice_due_date") or ""))
+                except Exception as e:
+                    print(f"[FIREBASE] Error persisting invoice_due_date in set_company_fields: {e}")
+                    # no stop, intentar actualizar demás campos
+
+            if fields_copy:
+                doc_ref = self.db.collection("companies").document(str(company_id))
+                # agregar metadata de auditoría si lo deseas
+                # fields_copy['_updated_by'] = self.user_id
+                doc_ref.update(fields_copy)
+        except Exception as e:
+            print(f"[FIREBASE] update_company_fields error for {company_id}: {e}")
             raise
     
     # ===== ÍTEMS =====
-    
+
     def get_all_items(self) -> List[Dict[str, Any]]:
         """
         Obtiene todos los ítems de Firestore.
-        
         Returns:
             Lista de ítems con todos sus campos
         """
         try:
             items_ref = self.db.collection('items')
             docs = items_ref.stream()
-            
+
             items = []
             for doc in docs:
-                item_data = doc.to_dict()
-                item_data['id'] = doc.id
-                items.append(item_data)
-            
+                item_data = doc.to_dict() or {}
+                item_data['id'] = int(doc.id) if str(doc.id).isdigit() else doc.id
+                # Normalizar nombres comunes a los que espera la UI
+                normalized = {
+                    'id': item_data.get('id'),
+                    'code': item_data.get('code') or item_data.get('codigo') or '',
+                    'name': item_data.get('name') or item_data.get('nombre') or '',
+                    'unit': item_data.get('unit') or item_data.get('unidad') or '',
+                    'cost': float(item_data.get('cost') or item_data.get('costo') or 0.0),
+                    'price': float(item_data.get('price') or item_data.get('precio') or 0.0),
+                    'category_id': int(item_data.get('category_id')) if item_data.get('category_id') is not None else item_data.get('category_id'),
+                    'description': item_data.get('description') or item_data.get('desc') or ''
+                }
+                items.append(normalized)
+
             return items
         except Exception as e:
             print(f"[FIREBASE] Error getting all items: {e}")
             return []
-    
+
     def get_items_like(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Busca ítems por código o nombre."""
+        """Busca ítems por código o nombre (cliente-side)."""
         try:
-            items_ref = self.db.collection('items')
-            
-            # Firestore no soporta LIKE, así que filtramos en cliente
-            # Para mejor rendimiento, usar índices y queries específicas
-            all_items = []
-            
-            for doc in items_ref.limit(100).stream():
-                item_data = doc.to_dict()
-                item_data['id'] = doc.id
-                
-                # Filtrar por código o nombre
-                code = str(item_data.get('code', '')).lower()
-                name = str(item_data.get('name', '')).lower()
-                query_lower = query.lower()
-                
-                if query_lower in code or query_lower in name:
-                    all_items.append(item_data)
-                    
-                    if len(all_items) >= limit:
+            items = []
+            for doc in self.db.collection('items').limit(200).stream():
+                d = doc.to_dict() or {}
+                code = str(d.get('code', '')).lower()
+                name = str(d.get('name', '')).lower()
+                q = query.lower()
+                if q in code or q in name:
+                    normalized = {
+                        'id': int(doc.id) if str(doc.id).isdigit() else doc.id,
+                        'code': d.get('code') or '',
+                        'name': d.get('name') or '',
+                        'unit': d.get('unit') or '',
+                        'cost': float(d.get('cost') or 0),
+                        'price': float(d.get('price') or 0),
+                        'category_id': d.get('category_id'),
+                        'description': d.get('description') or ''
+                    }
+                    items.append(normalized)
+                    if len(items) >= limit:
                         break
-            
-            return all_items
+            return items
         except Exception as e:
             print(f"[FIREBASE] Error searching items: {e}")
             return []
-    
+
     def get_item_by_code(self, code: str) -> Optional[Dict[str, Any]]:
         """Obtiene un ítem por código exacto."""
         try:
             items_ref = self.db.collection('items')
             query = items_ref.where('code', '==', code).limit(1)
-            
+
             docs = list(query.stream())
             if docs:
-                item_data = docs[0].to_dict()
-                item_data['id'] = docs[0].id
+                item_data = docs[0].to_dict() or {}
+                item_data['id'] = int(docs[0].id) if str(docs[0].id).isdigit() else docs[0].id
                 return item_data
-            
+
             return None
         except Exception as e:
             print(f"[FIREBASE] Error getting item by code {code}: {e}")
@@ -786,3 +871,33 @@ class FirebaseDataAccess(DataAccess):
                 return fallback_local_path
             
             return None
+
+
+    # ===== CATEGORIES =====
+
+    def get_all_categories(self) -> List[Dict[str, Any]]:
+        """
+        Obtiene todas las categorías desde la colección 'categories'.
+        Retorna lista de dicts con claves: id, name, code_prefix, next_seq, description (simil sql).
+        """
+        try:
+            cols = self.db.collection('categories')
+            docs = cols.stream()
+            cats = []
+            for doc in docs:
+                d = doc.to_dict() or {}
+                # normalizar campos comunes
+                cat = {
+                    'id': int(doc.id) if str(doc.id).isdigit() else doc.id,
+                    'name': d.get('name') or d.get('nombre') or '',
+                    'code_prefix': d.get('code_prefix') or d.get('prefix') or '',
+                    'next_seq': int(d.get('next_seq', 1) or 1),
+                    'description': d.get('description') or ''
+                }
+                cats.append(cat)
+            # ordenar por name para consistencia con sqlite UI
+            cats.sort(key=lambda x: (x.get('name') or '').lower())
+            return cats
+        except Exception as e:
+            print(f"[FIREBASE] Error getting categories: {e}")
+            return []

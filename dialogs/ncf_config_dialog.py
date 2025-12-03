@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Diálogo de Configuración de Secuencias NCF
 Permite configurar secuencias por empresa y tipo de comprobante,
@@ -7,10 +9,12 @@ con soporte para cambio de nomenclatura 2026
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QComboBox, QMessageBox, QGroupBox, QCheckBox,
-    QHeaderView, QWidget
+    QHeaderView, QWidget, QDateEdit
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QFont
+
+from typing import Any, Dict
 
 # Tipos de comprobantes según DGII (prefijo → nombre)
 NCF_TYPES = {
@@ -36,6 +40,8 @@ NCF_2026_MAPPING = {
 class NCFConfigDialog(QDialog):
     """
     Configura secuencias NCF por empresa y tipo, persistiendo en ncf_sequences.
+    Además permite configurar el vencimiento fijo de facturas por empresa (persistido en Firestore 'sequences' collection
+    cuando el backend lo soporta).
     """
 
     def __init__(self, logic_or_parent=None, parent=None):
@@ -61,14 +67,15 @@ class NCFConfigDialog(QDialog):
         super().__init__(real_parent)
         self.logic = logic
         self.current_company_id = None
-        self.ncf_data = {}  # {prefix: {name, seq, new_prefix, activation_date, enabled}}
+        self.ncf_data: Dict[str, Dict[str, Any]] = {}  # {prefix: {name, seq, new_prefix, activation_date, enabled}}
+        self._due_cleared = False  # flag para indicar que user limpió la fecha (guardar como "")
 
         if not self.logic:
             raise RuntimeError("NCFConfigDialog: No se pudo resolver el backend de datos (logic).")
 
         self.setWindowTitle("Configuración de Secuencias NCF")
         self.setModal(True)
-        self.resize(900, 700)
+        self.resize(900, 720)
 
         self._init_ui()
         self._load_companies()
@@ -81,13 +88,29 @@ class NCFConfigDialog(QDialog):
         title.setFont(title_font); title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        company_layout = QHBoxLayout()
-        company_layout.addWidget(QLabel("Empresa:"))
+        # Empresa + Vencimiento fijo (migrado desde CompanyManagementWindow)
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("Empresa:"))
         self.company_combo = QComboBox()
         self.company_combo.currentIndexChanged.connect(self._on_company_changed)
-        company_layout.addWidget(self.company_combo)
-        company_layout.addStretch()
-        layout.addLayout(company_layout)
+        top_row.addWidget(self.company_combo)
+
+        top_row.addSpacing(16)
+        top_row.addWidget(QLabel("Vencimiento fijo facturas:"))
+        self.company_due_date_edit = QDateEdit()
+        self.company_due_date_edit.setCalendarPopup(True)
+        self.company_due_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.company_due_date_edit.setMinimumWidth(140)
+        self.company_due_date_edit.dateChanged.connect(self._on_due_date_changed)
+        top_row.addWidget(self.company_due_date_edit)
+
+        btn_clear_due = QPushButton("Limpiar")
+        btn_clear_due.setToolTip("Eliminar vencimiento fijo para esta empresa (usar N/A)")
+        btn_clear_due.clicked.connect(self._clear_due_date)
+        top_row.addWidget(btn_clear_due)
+
+        top_row.addStretch()
+        layout.addLayout(top_row)
 
         # Grupo 1: Secuencias actuales
         group1 = QGroupBox("Secuencias Actuales por Tipo de Comprobante")
@@ -163,22 +186,27 @@ class NCFConfigDialog(QDialog):
             cid = c.get('id') or c.get('company_id') or c.get('pk')
             name = c.get('name') or c.get('nombre') or str(cid)
             if cid is not None:
-                self.company_combo.addItem(str(name), int(cid))
+                try:
+                    self.company_combo.addItem(str(name), int(cid))
+                except Exception:
+                    self.company_combo.addItem(str(name), cid)
 
         if self.company_combo.count() > 0:
+            self.company_combo.setCurrentIndex(0)
             self._on_company_changed(0)
 
     def _on_company_changed(self, index):
         if index < 0:
             return
-        self.current_company_id = self.company_combo.itemData(index)
+        try:
+            self.current_company_id = self.company_combo.itemData(index)
+        except Exception:
+            self.current_company_id = self.company_combo.currentData()
         self._load_ncf_data()
         self._populate_tables()
+        self._load_company_due_date()
 
     def _load_ncf_data(self):
-        """
-        Carga desde ncf_sequences si está disponible; si no, siembra con máximo histórico.
-        """
         if not self.current_company_id:
             return
         self.ncf_data = {}
@@ -206,7 +234,6 @@ class NCFConfigDialog(QDialog):
                 }
 
     def _populate_tables(self):
-        # Tabla 1
         self.table.setRowCount(0)
         for prefix in sorted(NCF_TYPES.keys()):
             data = self.ncf_data.get(prefix, {})
@@ -220,7 +247,6 @@ class NCFConfigDialog(QDialog):
             edit_cell_btn.clicked.connect(lambda _c=False, p=prefix: self._edit_specific_sequence(p))
             self.table.setCellWidget(row, 3, edit_cell_btn)
 
-        # Tabla 2 (placeholder de configuración 2026)
         self.table_2026.setRowCount(0)
         for prefix in sorted(NCF_TYPES.keys()):
             data = self.ncf_data.get(prefix, {})
@@ -269,11 +295,49 @@ class NCFConfigDialog(QDialog):
             self.ncf_data[prefix]['seq'] = 0
             self._populate_tables()
 
+    def _on_due_date_changed(self, qdate: QDate):
+        self._due_cleared = False
+
+    def _clear_due_date(self):
+        self._due_cleared = True
+        self.company_due_date_edit.setDate(QDate.currentDate())
+
+    def _load_company_due_date(self):
+        if not self.current_company_id:
+            return
+        due_val = ""
+        try:
+            # Prefer backend-specific getter
+            if hasattr(self.logic, "get_company_due_date"):
+                due_val = (self.logic.get_company_due_date(int(self.current_company_id)) or "") or ""
+            elif hasattr(self.logic, "get_company_invoice_due_date"):
+                due_val = (self.logic.get_company_invoice_due_date(int(self.current_company_id)) or "") or ""
+            elif hasattr(self.logic, "get_company_details"):
+                det = self.logic.get_company_details(int(self.current_company_id)) or {}
+                due_val = det.get("invoice_due_date") or det.get("invoice_due") or det.get("due_date") or ""
+            else:
+                due_val = ""
+        except Exception as e:
+            print(f"[NCF] Error cargando vencimiento de empresa {self.current_company_id}: {e}")
+            due_val = ""
+
+        if not due_val:
+            self.company_due_date_edit.setDate(QDate.currentDate())
+            self._due_cleared = True
+        else:
+            try:
+                parts = due_val[:10].split("-")
+                y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                self.company_due_date_edit.setDate(QDate(y, m, d))
+                self._due_cleared = False
+            except Exception:
+                self.company_due_date_edit.setDate(QDate.currentDate())
+                self._due_cleared = False
+
     def _save_config(self):
         if not self.current_company_id:
             QMessageBox.warning(self, "Error", "No hay empresa seleccionada"); return
         try:
-            # Actualizar meta de 2026 desde tabla 2026 (opcional, no persiste aún)
             for row in range(self.table_2026.rowCount()):
                 prefix_item = self.table_2026.item(row, 1)
                 if not prefix_item: continue
@@ -286,9 +350,10 @@ class NCFConfigDialog(QDialog):
                     self.ncf_data[prefix]['activation_date'] = date_item.text() if date_item else '2026-07-01'
                     self.ncf_data[prefix]['enabled'] = chk.isChecked() if chk else False
 
-            # Persistir last_seq en ncf_sequences
             self._persist_ncf_config()
-            QMessageBox.information(self, "Éxito", f"Secuencias guardadas para {self.company_combo.currentText()}")
+            self._persist_company_due_date()
+
+            QMessageBox.information(self, "Éxito", f"Secuencias y vencimiento guardados para {self.company_combo.currentText()}")
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al guardar configuración:\n{str(e)}")
@@ -302,6 +367,75 @@ class NCFConfigDialog(QDialog):
                 self.logic.set_ncf_last_seq(int(self.current_company_id), prefix, last_seq_user)
             except Exception as e:
                 print(f"[NCF] Error guardando secuencia {prefix}: {e}")
+
+    def _persist_company_due_date(self):
+        cid = int(self.current_company_id)
+        if self._due_cleared:
+            value_to_save = ""
+        else:
+            try:
+                qd = self.company_due_date_edit.date()
+                value_to_save = f"{qd.year():04d}-{qd.month():02d}-{qd.day():02d}"
+            except Exception:
+                value_to_save = ""
+
+        # Primero intentar método explícito (FirebaseDataAccess impl)
+        try:
+            if hasattr(self.logic, "set_company_due_date"):
+                ok = False
+                try:
+                    ok = bool(self.logic.set_company_due_date(cid, value_to_save))
+                except Exception as e:
+                    print(f"[NCF] set_company_due_date failed: {e}")
+                if ok:
+                    return
+        except Exception:
+            pass
+
+        # Intentar métodos genéricos soportados por LogicController
+        tried = []
+        try:
+            if hasattr(self.logic, "update_company_fields"):
+                try:
+                    self.logic.update_company_fields(cid, {"invoice_due_date": value_to_save})
+                    return
+                except Exception as e:
+                    tried.append(f"update_company_fields: {e}")
+            if hasattr(self.logic, "update_company_dict"):
+                try:
+                    self.logic.update_company_dict(cid, {"invoice_due_date": value_to_save})
+                    return
+                except Exception as e:
+                    tried.append(f"update_company_dict: {e}")
+            if hasattr(self.logic, "set_company_field"):
+                try:
+                    self.logic.set_company_field(cid, "invoice_due_date", value_to_save)
+                    return
+                except Exception as e:
+                    tried.append(f"set_company_field: {e}")
+            # Fallback a update_company manteniendo rutas si existe
+            if hasattr(self.logic, "get_company_details") and hasattr(self.logic, "update_company"):
+                try:
+                    det = self.logic.get_company_details(cid) or {}
+                    tpl = det.get("invoice_template_path", "") or ""
+                    outp = det.get("invoice_output_base_path", "") or ""
+                    name = det.get("name", "") or ""
+                    rnc = det.get("rnc", "") or ""
+                    self.logic.update_company(cid, name, rnc, det.get("address_line1") or det.get("address") or "", tpl, outp)
+                    if hasattr(self.logic, "set_company_field"):
+                        try:
+                            self.logic.set_company_field(cid, "invoice_due_date", value_to_save)
+                            return
+                        except Exception as e:
+                            tried.append(f"post update_company set_company_field: {e}")
+                except Exception as e:
+                    tried.append(f"fallback update_company: {e}")
+
+            print("[NCF] No se pudo persistir invoice_due_date. Intentos:", tried)
+        except Exception as e:
+            print(f"[NCF] Error persisting due date: {e}")
+        # si no se pudo persistir, se deja en consola; no bloqueará guardado de secuencias
+        print("[NCF] Warning: invoice_due_date not persisted for company", cid)
 
 
 def show_ncf_config_dialog(logic, parent=None):
