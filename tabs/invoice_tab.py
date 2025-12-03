@@ -74,6 +74,10 @@ class InvoiceTab(QWidget):
     - Secuencias NCF persistentes (preview vs consumo)
     - Ítems con unidad desde maestro
     - Exportación y vista previa
+
+    Ahora soporta refrescar inmediatamente el vencimiento fijo de facturas guardado
+    por NCFConfigDialog/Firebase (métodos backend: get_company_due_date / set_company_due_date
+    o getters genéricos).
     """
     invoice_saved = pyqtSignal(int)
 
@@ -81,6 +85,7 @@ class InvoiceTab(QWidget):
         super().__init__(parent)
         self.logic = logic
         self.get_current_company = get_current_company_callable
+        self._company_fixed_due = False  # si la empresa tiene vencimiento fijo (no recalcular al cambiar fecha)
         try:
             print(f"[LOAD] InvoiceTab module: {__file__}")
         except Exception:
@@ -92,14 +97,18 @@ class InvoiceTab(QWidget):
     # -------------------------
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # Top action row
+        # Top action row - moved to topbar in MainWindow, keep minimal controls here
         top_btn_row = QHBoxLayout()
         self.edit_template_btn = QPushButton("Editar plantilla")
+        self.edit_template_btn.setProperty("flat", True)
         self.edit_template_btn.clicked.connect(self._on_edit_template)
         top_btn_row.addWidget(self.edit_template_btn)
 
         self.edit_company_btn = QPushButton("Editar empresa")
+        self.edit_company_btn.setProperty("flat", True)
         self.edit_company_btn.clicked.connect(self._open_company_manager)
         top_btn_row.addWidget(self.edit_company_btn)
 
@@ -112,10 +121,10 @@ class InvoiceTab(QWidget):
         layout.addLayout(top_btn_row)
 
         # COMBINED BLOCK: Datos de Factura + Datos del Cliente (compact)
-        datos_cliente_box = QGroupBox("1. Datos de la Factura  ·  Datos del Cliente")
+        datos_cliente_box = QGroupBox("Información de la Factura")
         g = QGridLayout(datos_cliente_box)
-        g.setHorizontalSpacing(8)
-        g.setVerticalSpacing(6)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(10)
 
         # NCF asignado (read-only for user, programmatically writable)
         self.ncf_number_edit = QLineEdit()
@@ -161,6 +170,7 @@ class InvoiceTab(QWidget):
 
         # refresh preview NCF button (small)
         self.btn_refresh_ncf = QPushButton("↻"); self.btn_refresh_ncf.setToolTip("Mostrar el próximo NCF (preview)")
+        self.btn_refresh_ncf.setProperty("flat", True)
         self.btn_refresh_ncf.clicked.connect(self._update_ncf_sequence)
 
         # Row 0: NCF | Refresh | Tipo Factura | Fecha | Vencimiento
@@ -195,7 +205,7 @@ class InvoiceTab(QWidget):
         self.currency_combo.currentIndexChanged.connect(self._on_currency_change)
 
         # 2. Detalles de la Factura (tabla) — includes Totals inline
-        detalles_box = QGroupBox("2. Detalles de la Factura")
+        detalles_box = QGroupBox("Ítems de la Factura")
         detalles_layout = QVBoxLayout(detalles_box)
 
         actions = QHBoxLayout()
@@ -209,26 +219,44 @@ class InvoiceTab(QWidget):
         self.invoice_items_table.setHorizontalHeaderLabels(["#", "Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"])
         self.invoice_items_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.invoice_items_table.verticalHeader().setVisible(False)
+        self.invoice_items_table.setAlternatingRowColors(True)
         detalles_layout.addWidget(self.invoice_items_table)
 
-        # Totals inline inside detalles block (compact right-aligned)
-        totals_row = QHBoxLayout()
+        # Totals section - sticky style
+        totals_widget = QWidget()
+        totals_widget.setObjectName("totalsSection")
+        totals_widget.setProperty("totalsSection", True)
+        totals_row = QHBoxLayout(totals_widget)
+        totals_row.setContentsMargins(16, 12, 16, 12)
         totals_row.addStretch(1)
-        self.apply_itbis_checkbox = QCheckBox("Aplicar ITBIS (18%)"); self.apply_itbis_checkbox.setChecked(True)
+        
+        self.apply_itbis_checkbox = QCheckBox("Aplicar ITBIS (18%)")
+        self.apply_itbis_checkbox.setChecked(True)
         self.apply_itbis_checkbox.stateChanged.connect(self._recalculate_invoice_totals)
+        
         self.subtotal_label = QLabel("Subtotal: RD$ 0.00")
+        self.subtotal_label.setProperty("muted", True)
+        
         self.itbis_label = QLabel("ITBIS: RD$ 0.00")
+        self.itbis_label.setProperty("muted", True)
+        
         self.total_label = QLabel("Total: RD$ 0.00")
+        self.total_label.setProperty("totalAmount", True)
+        from PyQt6.QtGui import QFont
+        total_font = QFont()
+        total_font.setPointSize(12)
+        total_font.setBold(True)
+        self.total_label.setFont(total_font)
 
         totals_row.addWidget(self.apply_itbis_checkbox)
-        totals_row.addSpacing(12)
+        totals_row.addSpacing(20)
         totals_row.addWidget(self.subtotal_label)
-        totals_row.addSpacing(8)
+        totals_row.addSpacing(12)
         totals_row.addWidget(self.itbis_label)
-        totals_row.addSpacing(8)
+        totals_row.addSpacing(12)
         totals_row.addWidget(self.total_label)
 
-        detalles_layout.addLayout(totals_row)
+        detalles_layout.addWidget(totals_widget)
         layout.addWidget(detalles_box)
 
         # Footer action buttons (kept simple)
@@ -378,23 +406,64 @@ class InvoiceTab(QWidget):
             self.exchange_rate_edit.setText("1.00"); self.exchange_rate_edit.setVisible(False)
 
     def _apply_default_due_date(self):
+        """
+        Prioridad:
+        1) Due date configured per-company (from backend via get_company_due_date / get_company_details)
+        2) Global fixed date in config_facot.INVOICE_FIXED_DUE_DATE
+        3) Global relative days in config_facot.INVOICE_DUE_DAYS (add to invoice_date)
+        """
+        company = None
+        try:
+            company = self.get_current_company()
+        except Exception:
+            company = None
+
+        # 1) Try per-company due date
+        try:
+            if company and company.get("id") is not None:
+                company_id = int(company.get("id"))
+                due = self._fetch_company_due_date(company_id)
+                if due:
+                    # set and mark as fixed
+                    self._set_invoice_due_date_widget(due)
+                    self._company_fixed_due = True
+                    return
+        except Exception:
+            pass
+
+        # 2) Global fixed in config
         fixed = getattr(config_facot, "INVOICE_FIXED_DUE_DATE", "") or ""
         days = int(getattr(config_facot, "INVOICE_DUE_DAYS", 0) or 0)
         if fixed:
             try:
                 y, m, d = [int(x) for x in fixed.split("-")]
                 self.invoice_due_date.setDate(QDate(y, m, d))
+                self._company_fixed_due = True
                 return
             except Exception:
                 pass
+
+        # 3) Relative days
         if days > 0:
             base = self.invoice_date.date()
             self.invoice_due_date.setDate(base.addDays(days))
+            self._company_fixed_due = False
+            return
+
+        # Default: today, not fixed
+        self.invoice_due_date.setDate(QDate.currentDate())
+        self._company_fixed_due = False
 
     def _on_invoice_date_changed(self, new_date: QDate):
-        fixed = getattr(config_facot, "INVOICE_FIXED_DUE_DATE", "") or ""
-        days = int(getattr(config_facot, "INVOICE_DUE_DAYS", 0) or 0)
+        """
+        Only auto-update due date when company does not have a fixed due date.
+        """
+        fixed = self._company_fixed_due
         if fixed:
+            return
+        days = int(getattr(config_facot, "INVOICE_DUE_DAYS", 0) or 0)
+        fixed_global = getattr(config_facot, "INVOICE_FIXED_DUE_DATE", "") or ""
+        if fixed_global:
             return
         if days > 0:
             self.invoice_due_date.setDate(new_date.addDays(days))
@@ -728,7 +797,10 @@ class InvoiceTab(QWidget):
         }
 
         try:
+            # if company payload contains invoice_due_date it will set widget (fixed)
             self._set_invoice_due_date_widget(payload.get("invoice_due_date") or "")
+            if payload.get("invoice_due_date"):
+                self._company_fixed_due = True
         except Exception:
             pass
 
@@ -823,7 +895,12 @@ class InvoiceTab(QWidget):
     def _clear_invoice_form(self):
         try:
             self.invoice_date.setDate(QDate.currentDate())
-            self.invoice_due_date.setDate(QDate.currentDate())
+            # If company has fixed due, reapply it; otherwise set today
+            if self._company_fixed_due:
+                # re-fetch to ensure widget shows current fixed date
+                self.refresh_company_due_date()
+            else:
+                self.invoice_due_date.setDate(QDate.currentDate())
             self.ncf_number_edit.clear()
             self.client_rnc.clear(); self.client_name.clear()
             self.currency_combo.setCurrentText(DEFAULT_CURRENCY)
@@ -845,13 +922,62 @@ class InvoiceTab(QWidget):
     # -------------------------
     # Direcciones / vencimiento fijo
     # -------------------------
-    def _compute_invoice_due_date(self, company_payload: dict, invoice_date_str: str) -> str:
-        due = (company_payload or {}).get("invoice_due_date") or ""
-        return (due or "").strip()
+    def _fetch_company_due_date(self, company_id: int) -> str:
+        """
+        Intenta obtener invoice_due_date desde backend.
+        Preferir métodos específicos de FirebaseDataAccess (get_company_due_date),
+        luego LogicController helpers, luego company details.
+        """
+        if not company_id:
+            return ""
+        try:
+            if hasattr(self.logic, "get_company_due_date"):
+                try:
+                    return (self.logic.get_company_due_date(int(company_id)) or "") or ""
+                except Exception:
+                    pass
+            if hasattr(self.logic, "get_company_invoice_due_date"):
+                try:
+                    return (self.logic.get_company_invoice_due_date(int(company_id)) or "") or ""
+                except Exception:
+                    pass
+            # fallback to get_company_details
+            if hasattr(self.logic, "get_company_details"):
+                try:
+                    det = self.logic.get_company_details(int(company_id)) or {}
+                    return det.get("invoice_due_date") or det.get("invoice_due") or det.get("due_date") or ""
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[InvoiceTab] Error fetching company due date: {e}")
+        return ""
+
+    def refresh_company_due_date(self):
+        """
+        Public method to re-read the company's invoice_due_date from backend and update widget immediately.
+        Call this after NCFConfigDialog saves to reflect changes immediately.
+        """
+        company = None
+        try:
+            company = self.get_current_company()
+        except Exception:
+            company = None
+        if not company or not company.get("id"):
+            return
+        cid = int(company.get("id"))
+        due = self._fetch_company_due_date(cid)
+        if due:
+            self._set_invoice_due_date_widget(due)
+            self._company_fixed_due = True
+        else:
+            # cleared -> fall back to config/default
+            self._company_fixed_due = False
+            self._apply_default_due_date()
 
     def _set_invoice_due_date_widget(self, due_str: str) -> None:
         try:
-            if not due_str: return
+            if not due_str:
+                return
             y, m, d = [int(x) for x in due_str[:10].split("-")]
             self.invoice_due_date.setDate(QDate(y, m, d))
             print(f"[ITAB-DUE] Prefill widget invoice_due_date <- {due_str}")

@@ -1,0 +1,3 @@
+/* Light Theme Override
+   All logic is now in style_template.qss handled by JSON tokens.
+*/

@@ -1,122 +1,196 @@
+/* ============================================================
+   FACOT MASTER TEMPLATE (Fixed Dropdowns & Visibility)
+   ============================================================ */
+
 /* --- GLOBAL --- */
-QWidget {
+QMainWindow, QDialog {
     background-color: {{background}};
     color: {{foreground}};
-    font-family: "Segoe UI", "Roboto", "Helvetica Neue", sans-serif;
-    font-size: 14px;
 }
 
-/* --- HEADINGS & LABELS --- */
-QLabel {
+QWidget {
+    font-family: "Segoe UI", "San Francisco", "Helvetica Neue", Arial, sans-serif;
+    font-size: 9pt;
     color: {{foreground}};
 }
-QLabel[class="heading"] {
-    font-size: 18px;
-    font-weight: bold;
-    color: {{primary}};
-    margin-bottom: 8px;
-}
-QLabel[class="subheading"] {
-    color: {{foreground_muted}};
-    font-weight: 600;
-}
 
-/* --- GROUP BOX (Estilo Tarjeta con Título Interno) --- */
-QGroupBox {
-    background-color: {{surface}};
-    border: 1px solid {{border}};
-    border-radius: 8px;
-    
-    /* Margen EXTERNO (separación con otros elementos de arriba) */
-    margin-top: 10px;
-    
-    /* Padding INTERNO SUPERIOR grande para dejar sitio al título */
-    padding-top: 35px; 
-    padding-left: 15px;
-    padding-right: 15px;
-    padding-bottom: 15px;
-
-    font-weight: bold;
-    color: {{primary}};
+/* --- SIDEBAR --- */
+QWidget#sidebar {
+    background-color: {{sidebar_bg}};
+    border-right: 1px solid {{border}};
+    min-width: 220px;
+    max-width: 220px;
 }
-
-QGroupBox::title {
-    /* CLAVE: 'padding' coloca el título DENTRO del borde, no encima */
-    subcontrol-origin: padding;
-    subcontrol-position: top left;
-    
-    /* Ajustamos la posición para que quede en la esquina superior izquierda interna */
-    top: 10px;
-    left: 10px;
-    
-    /* Al estar dentro, ya puede ser transparente y tomará el color de {{surface}} */
+QWidget#sidebar QPushButton {
     background-color: transparent;
+    color: {{sidebar_fg}};
+    border: none;
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 500;
+    margin: 2px 8px;
+}
+QWidget#sidebar QPushButton:hover {
+    background-color: {{surface_alt}};
     color: {{primary}};
-    padding: 0px;
+}
+QWidget#sidebar QPushButton:checked,
+QWidget#sidebar QPushButton:pressed {
+    background-color: {{primary}};
+    color: {{primary_text}};
 }
 
-/* --- INPUTS --- */
-QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox {
-    background-color: {{surface_alt}};
-    border: 1px solid {{border}};
-    border-radius: 6px;
-    padding: 6px 12px;
-    min-height: 24px;
-    color: {{foreground}};
-    selection-background-color: {{selection_bg}};
-    selection-color: {{selection_text}};
-}
-QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
-    border: 2px solid {{primary}};
+/* --- TOPBAR --- */
+QWidget#topbar {
     background-color: {{surface}};
-}
-QComboBox::drop-down {
-    border: none;
-    background: transparent;
-    width: 20px;
+    border-bottom: 1px solid {{border}};
+    min-height: 56px;
 }
 
 /* --- BUTTONS --- */
 QPushButton {
-    background-color: {{surface}};
-    border: 1px solid {{border}};
-    border-radius: 6px;
-    padding: 8px 16px;
-    color: {{foreground}};
+    background-color: {{primary}};
+    color: {{primary_text}};
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-size: 9pt;
     font-weight: 600;
+    min-height: 28px;
 }
-QPushButton:hover {
+QPushButton:hover { background-color: {{primary_hover}}; }
+QPushButton:pressed { background-color: {{border}}; }
+QPushButton:disabled {
     background-color: {{surface_alt}};
-    border-color: {{primary_hover}};
+    color: {{foreground_muted}};
+    border: 1px solid {{border}};
 }
-QPushButton:pressed {
+
+/* Secondary Button */
+QPushButton[secondary="true"] {
+    background-color: transparent;
+    color: {{primary}};
+    border: 1px solid {{border}};
+}
+QPushButton[secondary="true"]:hover {
+    border-color: {{primary}};
+    background-color: {{surface_alt}};
+}
+
+/* --- INPUTS (LINEAS VISIBLES) --- */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {
+    background-color: {{input_bg}};
+    color: {{foreground}};
+    border: 1px solid {{input_border}}; /* Borde visible */
+    border-radius: 4px;
+    padding: 6px 10px;
+    min-height: 28px; 
+    selection-background-color: {{selection_bg}};
+    selection-color: {{selection_text}};
+}
+
+QLineEdit:hover, QSpinBox:hover { border-color: {{primary}}; }
+QLineEdit:focus, QSpinBox:focus {
+    border: 2px solid {{primary}};
+    padding: 5px 9px; /* Ajuste por el borde de 2px */
+    outline: none;
+}
+
+/* --- COMBOBOX & DATEEDIT (Solucion Menu Negro) --- */
+QComboBox, QDateEdit {
+    background-color: {{input_bg}};
+    color: {{foreground}};
+    border: 1px solid {{input_border}};
+    border-radius: 4px;
+    padding: 6px 10px;
+    padding-right: 30px; /* Espacio para el icono */
+    min-height: 28px;
+}
+
+QComboBox:hover, QDateEdit:hover {
+    border-color: {{primary}};
+}
+QComboBox:focus, QDateEdit:focus {
+    border: 2px solid {{primary}};
+    padding: 5px 9px;
+}
+
+/* ESTILO DEL POPUP DESPLEGABLE (Crucial para tema Light) */
+QComboBox QAbstractItemView {
+    background-color: {{popup_bg}}; /* Fondo explícito */
+    color: {{popup_text}};         /* Texto explícito */
+    border: 1px solid {{border}};
+    selection-background-color: {{primary}};
+    selection-color: {{primary_text}};
+    outline: none;
+}
+
+/* BOTONES DEL INPUT */
+QComboBox::drop-down, QDateEdit::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 24px; 
+    border-left-width: 1px;
+    border-left-color: {{input_border}};
+    border-left-style: solid; 
+    border-top-right-radius: 4px; 
+    border-bottom-right-radius: 4px;
+    background-color: {{surface_alt}}; /* Efecto botón */
+}
+
+QComboBox::drop-down:hover, QDateEdit::drop-down:hover {
     background-color: {{border}};
 }
 
-/* Primary Action Button (Guardar, etc) */
-QPushButton[class="primary"] {
-    background-color: {{primary}};
-    color: {{primary_text}};
-    border: 1px solid {{primary}};
-}
-QPushButton[class="primary"]:hover {
-    background-color: {{primary_hover}};
-    border-color: {{primary_hover}};
+/* ICONOS */
+QComboBox::down-arrow {
+    image: {{icon_arrow}};
+    width: 10px; height: 10px;
 }
 
-/* Action Icon Button (Tablas) */
-QPushButton#actionButton {
+QDateEdit::down-arrow {
+    image: {{icon_calendar}};
+    width: 12px; height: 12px;
+}
+
+/* --- CALENDAR WIDGET --- */
+QCalendarWidget {
+    border: 1px solid {{border}};
+    border-radius: 6px;
+    background-color: {{calendar_bg}};
+}
+QCalendarWidget QWidget#qt_calendar_navigationbar {
+    background-color: {{calendar_nav_bg}};
+    border-bottom: 1px solid {{border}};
+}
+QCalendarWidget QToolButton {
     background-color: transparent;
+    color: {{foreground}};
     border: none;
     border-radius: 4px;
+    font-weight: bold;
     padding: 4px;
 }
-QPushButton#actionButton:hover {
-    background-color: {{selection_bg}};
+QCalendarWidget QToolButton:hover {
+    background-color: {{surface_alt}};
+}
+QCalendarWidget QToolButton#qt_calendar_prevmonth,
+QCalendarWidget QToolButton#qt_calendar_nextmonth {
+    qproperty-icon: none; 
+    image: {{icon_arrow}}; 
+}
+
+QCalendarWidget QAbstractItemView {
+    background-color: {{calendar_bg}};
+    color: {{calendar_text}};
+    selection-background-color: {{primary}};
+    selection-color: {{primary_text}};
+    outline: none;
 }
 
 /* --- TABLES --- */
-QTableWidget {
+QTableWidget, QTableView {
     background-color: {{surface}};
     alternate-background-color: {{surface_alt}};
     gridline-color: {{table_grid}};
@@ -128,61 +202,32 @@ QTableWidget {
 QHeaderView::section {
     background-color: {{table_header_bg}};
     color: {{foreground_muted}};
-    padding: 8px 12px;
     border: none;
     border-bottom: 2px solid {{border}};
-    font-weight: bold;
-    text-transform: uppercase;
-    font-size: 11px;
-    letter-spacing: 0.5px;
-}
-QTableWidget::item {
-    padding: 6px;
-}
-
-/* --- TABS --- */
-QTabWidget::pane {
-    border: 1px solid {{border}};
-    border-radius: 6px;
-    background-color: {{surface}};
-    top: -1px; 
-}
-QTabBar::tab {
-    background: {{background}};
-    color: {{foreground_muted}};
-    padding: 10px 24px;
-    margin-right: 4px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    border: 1px solid transparent;
+    padding: 8px 12px;
     font-weight: 600;
 }
-QTabBar::tab:selected {
-    background: {{surface}};
-    color: {{primary}};
-    border: 1px solid {{border}};
-    border-bottom: 1px solid {{surface}}; /* Blend with pane */
+
+/* --- OTHERS --- */
+QWidget[totalsSection="true"] {
+    background-color: {{surface}};
+    border-top: 2px solid {{primary}};
+    padding: 12px 16px;
+    border-radius: 0 0 6px 6px;
 }
-QTabBar::tab:hover:!selected {
-    background: {{surface_alt}};
-    color: {{foreground}};
+QWidget[totalsSection="true"] QLabel[totalAmount="true"] {
+    font-size: 11pt;
+    font-weight: 800;
+    color: {{primary}};
 }
 
-/* --- SCROLLBARS (Modern) --- */
 QScrollBar:vertical {
-    border: none;
-    background: {{background}};
+    background-color: {{background}};
     width: 10px;
     margin: 0px;
 }
 QScrollBar::handle:vertical {
-    background: {{border}};
-    min-height: 20px;
+    background-color: {{border}};
     border-radius: 5px;
-}
-QScrollBar::handle:vertical:hover {
-    background: {{foreground_muted}};
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0px;
+    min-height: 20px;
 }

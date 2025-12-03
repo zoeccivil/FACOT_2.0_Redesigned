@@ -69,6 +69,10 @@ def _ensure_facot_config_loaded(app: QApplication) -> None:
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("FACOT 2.0")
+    app.setOrganizationName("ZOEC CIVIL SRL")
+
+
 
     _ensure_facot_config_loaded(app)
 
@@ -80,7 +84,7 @@ def main():
         tm = get_theme_manager()
         tm.set_app(app)
         saved_id = tm.load_saved_theme()
-        theme_to_apply = saved_id or "light"  # default razonable
+        theme_to_apply = saved_id or "modern-midnight"  # Modern Midnight por defecto
         tm.apply_theme(app, theme_to_apply)
         print(f"[THEME] Tema aplicado al inicio: {theme_to_apply}")
     except Exception as e:

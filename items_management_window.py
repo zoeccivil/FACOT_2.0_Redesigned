@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Any
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDoubleValidator, QAction, QFontMetrics
@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView, QWidget, QFormLayout,
     QTextEdit, QSpinBox, QFileDialog, QSizePolicy, QProgressDialog, QMenu
 )
-from PyQt6.QtWidgets import QWidget
 # Excel
 try:
     from openpyxl import Workbook, load_workbook
@@ -412,7 +411,7 @@ class ExcelImportDialog(QDialog):
         if "Categorias" in wb.sheetnames:
             sh = wb["Categorias"]
             headers = [str(sh.cell(row=1, column=c).value or "").strip().lower() for c in range(1, sh.max_column+1)]
-            def idx(h): 
+            def idx(h):
                 return (headers.index(h) + 1) if h in headers else -1
             req = ["name", "code_prefix", "next_seq", "description"]
             miss = [r for r in req if r not in headers]
@@ -444,7 +443,7 @@ class ExcelImportDialog(QDialog):
         else:
             sh = wb["Items"]
             headers = [str(sh.cell(row=1, column=c).value or "").strip().lower() for c in range(1, sh.max_column+1)]
-            def idx(h): 
+            def idx(h):
                 return (headers.index(h) + 1) if h in headers else -1
             req = ["name", "unit", "cost", "price", "category_prefix", "description"]
             miss = [r for r in req if r not in headers]
@@ -466,7 +465,6 @@ class ExcelImportDialog(QDialog):
                         else:
                             created_items += 1
                     else:
-                        # sin código -> autogenerado
                         auto_coded += 1
                         created_items += 1
 
@@ -521,7 +519,7 @@ class ExcelImportDialog(QDialog):
         if "Categorias" in wb.sheetnames:
             sh = wb["Categorias"]
             headers = [str(sh.cell(row=1, column=c).value or "").strip().lower() for c in range(1, sh.max_column+1)]
-            def idx(h): 
+            def idx(h):
                 return (headers.index(h) + 1) if h in headers else -1
             req = ["name", "code_prefix", "next_seq", "description"]
             for r in range(2, sh.max_row+1):
@@ -564,7 +562,7 @@ class ExcelImportDialog(QDialog):
         if "Items" in wb.sheetnames and not progress.wasCanceled():
             sh = wb["Items"]
             headers = [str(sh.cell(row=1, column=c).value or "").strip().lower() for c in range(1, sh.max_column+1)]
-            def idx(h): 
+            def idx(h):
                 return (headers.index(h) + 1) if h in headers else -1
             with sqlite3.connect(db) as conn:
                 conn.execute("PRAGMA foreign_keys = ON;")
@@ -670,11 +668,11 @@ def generate_excel_template(save_path: str):
     # Validaciones de datos (usar rangos como string)
     dv_units = DataValidation(type="list", formula1="=Unidades!$A:$A", allow_blank=True)
     shi.add_data_validation(dv_units)
-    dv_units.add("C2:C1048576")  # antes: dv_units.add(shi["C2:C1048576"])
+    dv_units.add("C2:C1048576")
 
     dv_cat = DataValidation(type="list", formula1="=Categorias!$B:$B", allow_blank=False)
     shi.add_data_validation(dv_cat)
-    dv_cat.add("F2:F1048576")    # antes: dv_cat.add(shi["F2:F1048576"])
+    dv_cat.add("F2:F1048576")
 
     # Notas
     notes = wb.create_sheet("Notas")
@@ -723,14 +721,13 @@ def export_current_to_excel(save_path: str):
     for u in units:
         shu.append([u])
 
-    # Validaciones (usar rangos como string)
     dv_units = DataValidation(type="list", formula1="=Unidades!$A:$A", allow_blank=True)
     shi.add_data_validation(dv_units)
-    dv_units.add("C2:C1048576")  # antes: dv_units.add(shi["C2:C1048576"])
+    dv_units.add("C2:C1048576")
 
     dv_cat = DataValidation(type="list", formula1="=Categorias!$B:$B", allow_blank=False)
     shi.add_data_validation(dv_cat)
-    dv_cat.add("F2:F1048576")    # antes: dv_cat.add(shi["F2:F1048576"])
+    dv_cat.add("F2:F1048576")
 
     notes = wb.create_sheet("Notas")
     notes["A1"] = "Exportado desde la aplicación"
@@ -738,9 +735,15 @@ def export_current_to_excel(save_path: str):
     notes["A3"] = "Si dejas 'code(optional)' vacío, se autogenerará al importar."
 
     wb.save(save_path)
+
 # -------------------- Ventana principal -------------------- #
 class ItemsManagementWindow(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, backend: Optional[Any] = None):
+        """
+        backend: opcional. Si se provee y soporta get_all_categories/get_all_items,
+                 la ventana mostrará datos desde el backend (por ejemplo Firestore).
+                 Si no, seguirá funcionando con la BD SQLite local.
+        """
         super().__init__(parent)
         self.setWindowTitle("Gestión de Ítems y Categorías")
         # Permitir maximizar y expandir
@@ -749,7 +752,14 @@ class ItemsManagementWindow(QDialog):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.setMinimumSize(1120, 640)
-        ensure_items_schema(get_db_path())
+
+        # backend puede ser FirebaseDataAccess o similar
+        self.backend = backend
+
+        # Si no hay backend o el backend no provee lectura de categorías/items, asegurar esquema sqlite
+        if not (self.backend and hasattr(self.backend, 'get_all_categories') and hasattr(self.backend, 'get_all_items')):
+            ensure_items_schema(get_db_path())
+
         self._build_ui()
         self._load_categories()
         self._load_items()
@@ -836,6 +846,26 @@ class ItemsManagementWindow(QDialog):
 
     # Categorías
     def _fetch_categories(self) -> List[Tuple[int, str, str, int, str]]:
+        # Si el backend soporta get_all_categories, usarlo
+        if self.backend and hasattr(self.backend, 'get_all_categories'):
+            try:
+                cats = self.backend.get_all_categories() or []
+                out: List[Tuple[int, str, str, int, str]] = []
+                for c in cats:
+                    cid = c.get('id')
+                    name = c.get('name') or c.get('nombre') or ""
+                    prefix = c.get('code_prefix') or c.get('prefix') or ""
+                    next_seq = int(c.get('next_seq', 1) or 1)
+                    desc = c.get('description') or ""
+                    out.append((cid, name, prefix, next_seq, desc))
+                # ordenar por nombre
+                out.sort(key=lambda x: (x[1] or "").lower())
+                return out
+            except Exception as e:
+                print(f"[ItemsWindow] Error loading categories from backend: {e}")
+                # continuar al fallback sqlite
+
+        # fallback sqlite
         db = get_db_path()
         ensure_items_schema(db)
         with sqlite3.connect(db) as conn:
@@ -857,7 +887,15 @@ class ItemsManagementWindow(QDialog):
 
     def _update_next_code_preview(self):
         cid = self.cat_combo.currentData()
-        code = get_next_code(get_db_path(), cid) if cid else None
+        code = None
+        # If backend implements get_next_code, try it
+        if self.backend and hasattr(self.backend, 'get_next_code'):
+            try:
+                code = self.backend.get_next_code(cid)
+            except Exception:
+                code = None
+        if not code:
+            code = get_next_code(get_db_path(), cid) if cid else None
         self.next_code_preview.setText(f"Siguiente código: {code or '-'}")
 
     def _new_category(self):
@@ -1030,32 +1068,75 @@ class ItemsManagementWindow(QDialog):
 
     # Carga de tabla
     def _load_items(self):
-        db = get_db_path()
-        ensure_items_schema(db)
         search = (self.search_edit.text() or "").strip().lower()
         current_cid = self.cat_combo.currentData()
-        query = """
-            SELECT i.id, i.code, i.name, i.unit, i.cost, i.price, IFNULL(c.name,''), IFNULL(i.description,'')
-            FROM items i
-            LEFT JOIN categories c ON i.category_id = c.id
-            WHERE (LOWER(i.code) LIKE ? OR LOWER(i.name) LIKE ? OR LOWER(IFNULL(c.name,'')) LIKE ?)
-        """
-        params = [f"%{search}%", f"%{search}%", f"%{search}%"]
-        if current_cid:
-            query += " AND i.category_id = ?"
-            params.append(current_cid)
-        query += " ORDER BY i.id"
-        with sqlite3.connect(db) as conn:
-            items = conn.execute(query, params).fetchall()
+
+        items_rows: List[Tuple] = []
+
+        # Prefer backend if available
+        if self.backend and hasattr(self.backend, 'get_all_items'):
+            try:
+                all_items = self.backend.get_all_items() or []
+                for it in all_items:
+                    code = str(it.get('code') or it.get('codigo') or "").strip()
+                    name = str(it.get('name') or it.get('nombre') or "").strip()
+                    unit = str(it.get('unit') or it.get('unidad') or "").strip()
+                    cost = float(it.get('cost') or it.get('costo') or 0.0)
+                    price = float(it.get('price') or it.get('precio') or 0.0)
+                    cat_id = it.get('category_id')
+                    desc = it.get('description') or it.get('desc') or ""
+                    # filtro
+                    q = search
+                    if q:
+                        if q not in code.lower() and q not in name.lower() and q not in str(cat_id or "").lower():
+                            continue
+                    if current_cid and str(cat_id) != str(current_cid):
+                        continue
+                    # preparar fila compatible con la vista (id, code, name, unit, cost, price, category_name, desc)
+                    items_rows.append((None, code, name, unit, cost, price, "", desc))
+            except Exception as e:
+                print(f"[ItemsWindow] Error fetching items from backend: {e}")
+                items_rows = []
+
+        if not items_rows:
+            # fallback to sqlite query (original behavior)
+            db = get_db_path()
+            ensure_items_schema(db)
+            current_cid = self.cat_combo.currentData()
+            query = """
+                SELECT i.id, i.code, i.name, i.unit, i.cost, i.price, IFNULL(c.name,''), IFNULL(i.description,'')
+                FROM items i
+                LEFT JOIN categories c ON i.category_id = c.id
+                WHERE (LOWER(i.code) LIKE ? OR LOWER(i.name) LIKE ? OR LOWER(IFNULL(c.name,'')) LIKE ?)
+            """
+            params = [f"%{search}%", f"%{search}%", f"%{search}%"]
+            if current_cid:
+                query += " AND i.category_id = ?"
+                params.append(current_cid)
+            query += " ORDER BY i.id"
+            with sqlite3.connect(db) as conn:
+                items = conn.execute(query, params).fetchall()
+            items_rows = items
 
         self.table.setRowCount(0)
-        for idx, row in enumerate(items, 1):
+        for idx, row in enumerate(items_rows, 1):
             r = self.table.rowCount()
             self.table.insertRow(r)
             # Columna # (4 dígitos máx. aprox.)
             self.table.setItem(r, 0, QTableWidgetItem(str(idx)))
             # code, name, unit, cost, price, category, description
-            code, name, unit, cost, price, cat_name, desc = row[1], row[2], row[3], row[4], row[5], row[6], row[7]
+            try:
+                code, name, unit, cost, price, cat_name, desc = row[1], row[2], row[3], row[4], row[5], row[6], row[7]
+            except Exception:
+                # defensivo: llenar con defaults
+                code = str(row[1]) if len(row) > 1 else ""
+                name = str(row[2]) if len(row) > 2 else ""
+                unit = str(row[3]) if len(row) > 3 else ""
+                cost = float(row[4]) if len(row) > 4 else 0.0
+                price = float(row[5]) if len(row) > 5 else 0.0
+                cat_name = str(row[6]) if len(row) > 6 else ""
+                desc = str(row[7]) if len(row) > 7 else ""
+
             self.table.setItem(r, 1, QTableWidgetItem(str(code or "")))
             self.table.setItem(r, 2, QTableWidgetItem(str(name or "")))
             self.table.setItem(r, 3, QTableWidgetItem(str(unit or "")))
@@ -1080,16 +1161,6 @@ class ItemsManagementWindow(QDialog):
 
     # --- Layout de columnas conforme requerimientos ---
     def _apply_table_column_layout(self):
-        """
-        Ajusta anchos:
-        - #: ~4 dígitos
-        - Código: ~7 dígitos
-        - Nombre: se estira (stretch)
-        - UD: ~4 chars
-        - Costo/Precio: ~9-12 dígitos con separadores
-        - Categoría: dejar por defecto
-        - Descripción: oculta
-        """
         fm = QFontMetrics(self.table.font())
         hash_w = fm.horizontalAdvance("9999") + 20
         code_w = fm.horizontalAdvance("9999999") + 22
@@ -1136,7 +1207,6 @@ class ItemsManagementWindow(QDialog):
         data = self._get_selected_item()
         if not data:
             QMessageBox.information(self, "Ítems", "Seleccione un ítem."); return
-        # Mostrar un resumen en un cuadro de diálogo
         text = (
             f"Código: {data['code']}\n"
             f"Nombre: {data['name']}\n"
@@ -1175,7 +1245,6 @@ class ItemsManagementWindow(QDialog):
         fn, _ = QFileDialog.getSaveFileName(self, "Exportar a Excel", "inventario_items.xlsx", "Excel (*.xlsx)")
         if not fn:
             return
-        # Barra de progreso (simple: 3 pasos)
         progress = QProgressDialog("Exportando a Excel…", None, 0, 3, self)
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(200)

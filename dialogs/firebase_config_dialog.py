@@ -100,7 +100,7 @@ class FirebaseConfigDialog(QDialog):
             "💡 Se autocompleta al seleccionar las credenciales. "
             "Formato: {project_id}.firebasestorage.app"
         )
-        bucket_hint.setStyleSheet("color: gray; font-size: 11px;")
+        bucket_hint.setProperty("muted", True)
         bucket_hint.setWordWrap(True)
         storage_layout.addWidget(bucket_hint)
         

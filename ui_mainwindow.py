@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QComboBox, QMessageBox,
-    QMenuBar, QMenu, QFileDialog, QStatusBar
+    QMenuBar, QMenu, QFileDialog, QStatusBar, QHBoxLayout
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
@@ -33,86 +33,58 @@ from dialogs.template_editor_dialog import TemplateEditorDialog
 
 # -*- coding: utf-8 -*-
 
-
 # ahora las importaciones normales
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton,
     QDateEdit, QTableWidget, QTableWidgetItem, QFileDialog, QMessageBox, QComboBox,
-    QHeaderView, QGroupBox, QToolButton, QCheckBox
+    QHeaderView, QGroupBox, QToolButton, QCheckBox, QDialog
 )
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
-# ... el resto de imports ...
 
 class HybridLogicWrapper:
     """
     Wrapper híbrido que combina logic (SQLite) y data_access (Firebase).
-    
-    Intercepta llamadas de atributos y las redirige al backend correcto:
-    - Si data_access tiene el método, lo usa (Firebase)
-    - Si no, delega a logic (SQLite)
-    
-    Esto permite que tabs existentes funcionen con ambos backends
-    sin modificar su código.
+    Prioridad: data_access -> logic.
     """
-    
     def __init__(self, logic, data_access=None):
         self._logic = logic
         self._data_access = data_access
         self._use_firebase = data_access is not None
-        
-        # Para debugging
         if self._use_firebase:
             print(f"[HYBRID] Created hybrid wrapper with Firebase backend")
         else:
             print(f"[HYBRID] Created hybrid wrapper with SQLite only")
-    
+
     def __getattr__(self, name):
-        """
-        Intercepta acceso a atributos/métodos.
-        
-        Prioridad:
-        1. Si data_access existe y tiene el método -> usar Firebase
-        2. Sino -> usar logic (SQLite)
-        """
-        # Si tenemos data_access y tiene el método, usarlo
         if self._use_firebase and self._data_access and hasattr(self._data_access, name):
             attr = getattr(self._data_access, name)
-            # Si es callable, retornar función que logguea
             if callable(attr):
                 def logged_call(*args, **kwargs):
-                    # print(f"[HYBRID] Using Firebase for: {name}")
                     return attr(*args, **kwargs)
                 return logged_call
             return attr
-        
-        # Sino, delegar a logic
         if hasattr(self._logic, name):
             attr = getattr(self._logic, name)
             if callable(attr):
                 def logged_call(*args, **kwargs):
-                    # print(f"[HYBRID] Using SQLite for: {name}")
                     return attr(*args, **kwargs)
                 return logged_call
             return attr
-        
-        # Si no existe en ninguno, error estándar
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-    
-    # Propiedades que deben accederse directamente
+
     @property
     def conn(self):
-        """Retorna conexión SQLite para compatibilidad."""
         return self._logic.conn if hasattr(self._logic, 'conn') else None
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Gestión de Facturas y Cotizaciones")
         self.resize(1100, 790)
-        self.data_access = None  # Will hold DataAccess instance
-        self.current_access_mode = "SQLITE"  # Track current mode
-        self.hybrid_logic = None  # Will hold HybridLogicWrapper
+        self.data_access = None
+        self.current_access_mode = "SQLITE"
+        self.hybrid_logic = None
+        self.companies: dict[str, dict] = {}
         self._init_db()
         self._setup_ui()
         self._setup_menu()
@@ -130,68 +102,247 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", "No se seleccionó una base de datos. El programa se cerrará.")
                 sys.exit(1)
         self.logic = LogicController(db_path)
-        
-        # Initialize data_access with preferred mode from config
+
         try:
             from data_access import get_data_access, DataAccessMode
             from config_facot import get_connection_mode
-            
-            # Cargar modo preferido de configuración
-            preferred_mode = get_connection_mode()  # "SQLITE", "FIREBASE", or "AUTO"
+
+            preferred_mode = get_connection_mode()
             print(f"[MAIN] Modo de conexión preferido: {preferred_mode}")
-            
-            # Convertir a DataAccessMode enum
+
             mode_enum = DataAccessMode[preferred_mode]
-            
-            # Inicializar data_access con el modo preferido
-            self.data_access = get_data_access(logic_controller=self.logic, mode=mode_enum)
+            # Prefer passing logic_controller where applicable
+            try:
+                self.data_access = get_data_access(logic_controller=self.logic, mode=mode_enum)
+            except TypeError:
+                # fallback to call signature without logic_controller
+                self.data_access = get_data_access(mode=mode_enum)
             self.current_access_mode = preferred_mode
-            
-            # Crear wrapper híbrido que combina logic y data_access
             self.hybrid_logic = HybridLogicWrapper(self.logic, self.data_access)
             print(f"[MAIN] Created hybrid logic wrapper")
-            
+
         except Exception as e:
             print(f"[MAIN] Warning: Could not initialize data_access: {e}")
             self.data_access = None
             self.current_access_mode = "SQLITE"
-            # Wrapper solo con logic
             self.hybrid_logic = HybridLogicWrapper(self.logic, None)
 
     def _setup_ui(self):
-        central = QWidget(); layout = QVBoxLayout(central); self.setCentralWidget(central)
+        from PyQt6.QtWidgets import QStackedWidget
+        from widgets.sidebar_widget import SidebarWidget
+        from widgets.topbar_widget import TopbarWidget
 
-        # Selector de empresa
-        self.company_selector = QComboBox()
-        layout.addWidget(QLabel("Empresa:")); layout.addWidget(self.company_selector)
-        self._populate_companies()
-        self.company_selector.currentIndexChanged.connect(self._on_company_change)
+        central = QWidget()
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        self.setCentralWidget(central)
 
-        # Función para obtener la empresa actual (las pestañas usan get_current_company inyectado)
-        get_company = lambda: self.companies.get(self.company_selector.currentText())
+        self.sidebar = SidebarWidget()
+        self.sidebar.section_changed.connect(self._on_sidebar_section_changed)
+        main_layout.addWidget(self.sidebar)
 
-        # Tabs modulares
-        from PyQt6.QtWidgets import QTabWidget
-        self.tabs = QTabWidget()
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
-        # Usar hybrid_logic en lugar de logic directo
-        # Esto permite que los tabs usen Firebase o SQLite transparentemente
+        self.topbar = TopbarWidget()
+        content_layout.addWidget(self.topbar)
+
+        self.stacked_widget = QStackedWidget()
+        content_layout.addWidget(self.stacked_widget)
+
+        main_layout.addWidget(content_widget)
+
+        self.companies = {}
+
+        def get_company_callable():
+            try:
+                name = self.topbar.get_current_company()
+                if not name:
+                    return None
+                return (self.companies or {}).get(name)
+            except Exception:
+                return None
+
         logic_to_pass = self.hybrid_logic if self.hybrid_logic else self.logic
-        
-        self.invoice_tab = InvoiceTab(logic_to_pass, get_company)
-        self.quotation_tab = QuotationTab(logic_to_pass, get_company)
-        self.invoice_history_tab = InvoiceHistoryTab(logic_to_pass, get_company)
-        self.quotation_history_tab = QuotationHistoryTab(logic_to_pass, get_company)
 
-        # Conexiones: refrescar historial al guardar
-        self.invoice_tab.invoice_saved.connect(lambda _id: self.invoice_history_tab.refresh())
-        self.quotation_tab.quotation_saved.connect(lambda _id: self.quotation_history_tab.refresh())
+        self.invoice_tab = InvoiceTab(logic_to_pass, get_company_callable)
+        self.quotation_tab = QuotationTab(logic_to_pass, get_company_callable)
+        self.invoice_history_tab = InvoiceHistoryTab(logic_to_pass, get_company_callable)
+        self.quotation_history_tab = QuotationHistoryTab(logic_to_pass, get_company_callable)
 
-        self.tabs.addTab(self.invoice_tab, "Factura")
-        self.tabs.addTab(self.quotation_tab, "Cotización")
-        self.tabs.addTab(self.invoice_history_tab, "Historial de Facturas")
-        self.tabs.addTab(self.quotation_history_tab, "Historial de Cotizaciones")
-        layout.addWidget(self.tabs)
+        try:
+            self.invoice_tab.invoice_saved.connect(lambda _id: self.invoice_history_tab.refresh())
+        except Exception:
+            pass
+        try:
+            self.quotation_tab.quotation_saved.connect(lambda _id: self.quotation_history_tab.refresh())
+        except Exception:
+            pass
+
+        self.stacked_widget.addWidget(self.invoice_tab)
+        self.stacked_widget.addWidget(self.quotation_tab)
+        self.stacked_widget.addWidget(self.invoice_history_tab)
+        self.stacked_widget.addWidget(self.quotation_history_tab)
+
+        settings_placeholder = QWidget()
+        self.stacked_widget.addWidget(settings_placeholder)
+
+        self.section_index_map = {
+            "facturación": 0,
+            "cotizaciones": 1,
+            "historial_facturas": 2,
+            "historial_cotizaciones": 3,
+            "configuración": 4,
+        }
+        self.index_context_map = {
+            0: "invoice",
+            1: "quotation",
+            2: "invoice_history",
+            3: "quotation_history",
+            4: "settings",
+        }
+
+        self.stacked_widget.setCurrentIndex(0)
+        try:
+            self.topbar.set_context("invoice")
+        except Exception:
+            pass
+
+        self._populate_companies()
+
+        # Connect topbar signals now that companies and tabs exist
+        try:
+            try:
+                self.topbar.blockSignals(True)
+            except Exception:
+                pass
+
+            try:
+                keys = list(self.companies.keys())
+                if keys:
+                    if hasattr(self.topbar, "set_current_company"):
+                        self.topbar.set_current_company(keys[0])
+                    elif hasattr(self.topbar, "select_company_by_name"):
+                        self.topbar.select_company_by_name(keys[0])
+            except Exception:
+                pass
+
+            try:
+                self.topbar.company_changed.connect(self._on_company_change_from_topbar)
+                self.topbar.new_clicked.connect(self._on_topbar_new)
+                self.topbar.save_clicked.connect(self._on_topbar_save)
+                self.topbar.preview_clicked.connect(self._on_topbar_preview)
+                self.topbar.export_clicked.connect(self._on_topbar_export)
+                self.topbar.filter_clicked.connect(self._on_topbar_filter)
+            except Exception:
+                pass
+
+        finally:
+            try:
+                self.topbar.blockSignals(False)
+            except Exception:
+                pass
+
+        self._on_company_change()
+
+    def _on_sidebar_section_changed(self, section_name: str):
+        index = self.section_index_map.get(section_name, 0)
+        if section_name == "configuración":
+            dlg = ConfigLauncherDialog(self, logic=self.logic, hybrid_logic=self.hybrid_logic)
+            dlg.exec()
+            if hasattr(self, '_previous_section_index'):
+                self.stacked_widget.setCurrentIndex(self._previous_section_index)
+            return
+        self._previous_section_index = self.stacked_widget.currentIndex()
+        self.stacked_widget.setCurrentIndex(index)
+        context = self.index_context_map.get(index, "")
+        try:
+            self.topbar.set_context(context)
+        except Exception:
+            pass
+
+    def _on_company_change_from_topbar(self, company_name: str):
+        self._on_company_change()
+
+    def _on_topbar_new(self):
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:
+            try:
+                if hasattr(self.invoice_tab, "_limpiar_formulario"):
+                    self.invoice_tab._limpiar_formulario()
+                else:
+                    self.invoice_tab.on_company_change()
+            except Exception:
+                pass
+        elif current_index == 1:
+            try:
+                if hasattr(self.quotation_tab, "_limpiar_formulario"):
+                    self.quotation_tab._limpiar_formulario()
+                else:
+                    self.quotation_tab.on_company_change()
+            except Exception:
+                pass
+
+    def _on_topbar_save(self):
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:
+            try:
+                if hasattr(self.invoice_tab, "_guardar_factura"):
+                    self.invoice_tab._guardar_factura()
+                else:
+                    self.invoice_tab._save_invoice()
+            except Exception:
+                pass
+        elif current_index == 1:
+            try:
+                if hasattr(self.quotation_tab, "_guardar_cotizacion"):
+                    self.quotation_tab._guardar_cotizacion()
+                else:
+                    self.quotation_tab._save_quotation()
+            except Exception:
+                pass
+
+    def _on_topbar_preview(self):
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:
+            try:
+                if hasattr(self.invoice_tab, "_vista_previa"):
+                    self.invoice_tab._vista_previa()
+                else:
+                    self.invoice_tab._preview_invoice()
+            except Exception:
+                pass
+        elif current_index == 1:
+            try:
+                if hasattr(self.quotation_tab, "_vista_previa"):
+                    self.quotation_tab._vista_previa()
+                else:
+                    self.quotation_tab._preview_quotation()
+            except Exception:
+                pass
+
+    def _on_topbar_export(self):
+        current_index = self.stacked_widget.currentIndex()
+        try:
+            if current_index == 0 and hasattr(self.invoice_tab, "_exportar_factura"):
+                self.invoice_tab._exportar_factura()
+            elif current_index == 1 and hasattr(self.quotation_tab, "_exportar_cotizacion"):
+                self.quotation_tab._exportar_cotizacion()
+        except Exception:
+            pass
+
+    def _on_topbar_filter(self):
+        current_index = self.stacked_widget.currentIndex()
+        try:
+            if current_index == 2 and hasattr(self.invoice_history_tab, 'toggle_filters'):
+                self.invoice_history_tab.toggle_filters()
+            elif current_index == 3 and hasattr(self.quotation_history_tab, 'toggle_filters'):
+                self.quotation_history_tab.toggle_filters()
+        except Exception:
+            pass
 
     def _setup_menu(self):
         menu_bar = QMenuBar(self); self.setMenuBar(menu_bar)
@@ -213,7 +364,6 @@ class MainWindow(QMainWindow):
         salir_action = QAction("Salir", self); salir_action.triggered.connect(self.close)
         archivo_menu.addAction(salir_action)
 
-        # Menú Reportes (placeholders)
         reportes_menu = QMenu("&Reportes", self); menu_bar.addMenu(reportes_menu)
         reporte_ventas_action = QAction("📊 Reporte de Ventas", self)
         reporte_ventas_action.triggered.connect(self._abrir_reporte_ventas)
@@ -222,33 +372,30 @@ class MainWindow(QMainWindow):
         reporte_clientes_action.triggered.connect(self._abrir_reporte_clientes)
         reportes_menu.addAction(reporte_clientes_action)
 
-        # Menú Herramientas
         herramientas_menu = QMenu("&Herramientas", self); menu_bar.addMenu(herramientas_menu)
         migrar_firebase_action = QAction("🔄 Migrar a Firebase...", self)
         migrar_firebase_action.setShortcut("Ctrl+Shift+M")
         migrar_firebase_action.setToolTip("Migrar datos de SQLite a Firebase")
         migrar_firebase_action.triggered.connect(self._abrir_dialogo_migracion)
         herramientas_menu.addAction(migrar_firebase_action)
-        
+
         ncf_config_action = QAction("🔢 Configurar Secuencias NCF...", self)
         ncf_config_action.setShortcut("Ctrl+Shift+N")
         ncf_config_action.setToolTip("Configurar secuencias de NCF por empresa y tipo de comprobante")
         ncf_config_action.triggered.connect(self._abrir_configuracion_ncf)
         herramientas_menu.addAction(ncf_config_action)
-        
+
         herramientas_menu.addSeparator()
-        
+
         firebase_config_action = QAction("🔥 Configurar Firebase...", self)
         firebase_config_action.setShortcut("Ctrl+Shift+F")
         firebase_config_action.setToolTip("Configurar credenciales de Firebase")
         firebase_config_action.triggered.connect(self._abrir_configuracion_firebase)
         herramientas_menu.addAction(firebase_config_action)
 
-        # Menú Apariencias (Themes)
         apariencias_menu = QMenu("🎨 &Apariencias", self); menu_bar.addMenu(apariencias_menu)
         self._setup_theme_menu(apariencias_menu)
 
-        # Menú Opciones
         opciones_menu = QMenu("&Opciones", self); menu_bar.addMenu(opciones_menu)
         config_rutas_action = QAction("Configurar Rutas...", self)
         config_rutas_action.triggered.connect(self._abrir_configuracion)
@@ -262,59 +409,48 @@ class MainWindow(QMainWindow):
         gestion_items_action.triggered.connect(self._abrir_gestion_items)
         opciones_menu.addAction(gestion_items_action)
 
-        # Acción: Editar plantilla (abre el editor de plantillas para la empresa seleccionada)
         action_edit_template = QAction("Editar plantilla...", self)
         action_edit_template.setStatusTip("Editar plantilla para la empresa seleccionada")
         action_edit_template.triggered.connect(self._menu_edit_template)
         opciones_menu.addAction(action_edit_template)
-    
+
     def _setup_theme_menu(self, menu: QMenu):
-        """Configura el menú de temas/apariencias (compatible con lista o dict)."""
         try:
             from utils.theme_manager import get_available_themes, get_theme_manager
 
             themes = get_available_themes()
             theme_manager = get_theme_manager()
 
-            # Normalizar la estructura a una lista de tuplas (theme_id, theme_label)
             if isinstance(themes, dict):
-                theme_entries = list(themes.items())  # [(id, label), ...]
+                theme_entries = list(themes.items())
             elif isinstance(themes, list):
-                theme_entries = [(t, t) for t in themes]  # [(name, name), ...]
+                theme_entries = [(t, t) for t in themes]
             else:
                 try:
                     theme_entries = [(t, t) for t in list(themes)]
                 except Exception:
                     theme_entries = []
 
-            # Si no hay entradas, añadir placeholder y salir
             if not theme_entries:
                 placeholder = QAction("(Temas no disponibles)", self)
                 placeholder.setEnabled(False)
                 menu.addAction(placeholder)
                 return
 
-            # Tema actual desde config (si está disponible)
             try:
                 current = facot_config.get_theme()
             except Exception:
                 current = None
 
-            # Crear acciones para cada tema
             for theme_id, theme_name in theme_entries:
                 action = QAction(str(theme_name), self)
                 action.setCheckable(True)
-                action.setData(str(theme_id))  # almacenar id real en action.data()
-
-                # marcar si es el tema actual
+                action.setData(str(theme_id))
                 try:
                     action.setChecked(str(theme_id) == str(current))
                 except Exception:
                     action.setChecked(False)
-
-                # conectar acción (capturando theme_id en default arg)
                 action.triggered.connect(lambda checked, t=theme_id: self._apply_theme(t))
-
                 menu.addAction(action)
 
         except Exception as e:
@@ -323,98 +459,69 @@ class MainWindow(QMainWindow):
             placeholder.setEnabled(False)
             menu.addAction(placeholder)
 
-
-
     def _apply_theme(self, theme_id: str):
-        """Aplica un tema y lo guarda en la configuración."""
         try:
             from utils.theme_manager import get_theme_manager
             from PyQt6.QtWidgets import QApplication
-            
+
             theme_manager = get_theme_manager()
             theme_manager.set_app(QApplication.instance())
-            
+
             if theme_manager.save_and_apply_theme(theme_id):
-                # Actualizar checkmarks en el menú
                 self._update_theme_menu_checks(theme_id)
-                QMessageBox.information(
-                    self,
-                    "Tema aplicado",
-                    f"El tema '{theme_id}' se ha aplicado correctamente."
-                )
+                QMessageBox.information(self, "Tema aplicado", f"El tema '{theme_id}' se ha aplicado correctamente.")
         except Exception as e:
             QMessageBox.warning(self, "Error", f"No se pudo aplicar el tema: {e}")
-    
+
     def _update_theme_menu_checks(self, current_theme: str):
-        """Actualiza los checkmarks del menú de temas."""
         for menu in self.menuBar().findChildren(QMenu):
             if "Apariencias" in menu.title():
                 for action in menu.actions():
-                    # Use stored data for reliable matching
                     action_theme_id = action.data()
                     if action_theme_id:
                         action.setChecked(action_theme_id == current_theme)
-    
+
     def _abrir_configuracion_firebase(self):
-        """Abre el diálogo de configuración de Firebase."""
         try:
             from dialogs.firebase_config_dialog import FirebaseConfigDialog
-            
+
             dialog = FirebaseConfigDialog(self)
             if dialog.exec():
-                # Configuración guardada, intentar re-inicializar
-                QMessageBox.information(
-                    self,
-                    "Firebase Configurado",
-                    "La configuración de Firebase se ha guardado.\n\n"
-                    "Por favor, reinicie la aplicación para aplicar los cambios."
-                )
+                QMessageBox.information(self, "Firebase Configurado", "La configuración de Firebase se ha guardado.\n\nPor favor, reinicie la aplicación para aplicar los cambios.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo abrir la configuración de Firebase:\n{e}")
-    
+
     def _abrir_reporte_ventas(self):
-        """Abre el diálogo de reporte de ventas."""
         try:
             from dialogs.reports_dialog import SalesReportDialog
             dialog = SalesReportDialog(self.hybrid_logic or self.logic, self)
             dialog.exec()
         except ImportError:
-            QMessageBox.information(
-                self, 
-                "Reporte de Ventas", 
-                "El módulo de reportes está en desarrollo.\n\n"
-                "Próximamente podrá generar reportes de ventas por período."
-            )
+            QMessageBox.information(self, "Reporte de Ventas", "El módulo de reportes está en desarrollo.\n\nPróximamente podrá generar reportes de ventas por período.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error abriendo reporte de ventas: {e}")
-    
+
     def _abrir_reporte_clientes(self):
-        """Abre el diálogo de reporte por cliente."""
         try:
             from dialogs.reports_dialog import ClientsReportDialog
             dialog = ClientsReportDialog(self.hybrid_logic or self.logic, self)
             dialog.exec()
         except ImportError:
-            QMessageBox.information(
-                self, 
-                "Reporte por Cliente", 
-                "El módulo de reportes está en desarrollo.\n\n"
-                "Próximamente podrá generar reportes por cliente."
-            )
+            QMessageBox.information(self, "Reporte por Cliente", "El módulo de reportes está en desarrollo.\n\nPróximamente podrá generar reportes por cliente.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error abriendo reporte de clientes: {e}")
 
-    # --------- Menu handlers ----------
     def _abrir_base_de_datos(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Abrir Base de Datos", "", "Database Files (*.db);;Todos los archivos (*)")
         if filename:
             facot_config.set_db_path(filename)
             self.logic = LogicController(filename)
-            self._populate_companies()
-            # Reinyectar lógica en tabs
-            get_company = lambda: self.companies.get(self.company_selector.currentText())
+            get_company = lambda: (self.companies or {}).get(self.topbar.get_current_company() or "")
             self.invoice_tab.logic = self.logic; self.quotation_tab.logic = self.logic
             self.invoice_history_tab.logic = self.logic; self.quotation_history_tab.logic = self.logic
+            self.data_access = None
+            self.hybrid_logic = HybridLogicWrapper(self.logic, None)
+            self._populate_companies()
             self._on_company_change()
             QMessageBox.information(self, "Base de Datos", "Base de datos abierta correctamente.")
 
@@ -423,6 +530,8 @@ class MainWindow(QMainWindow):
         if filename:
             facot_config.set_db_path(filename)
             self.logic = LogicController(filename)
+            self.data_access = None
+            self.hybrid_logic = HybridLogicWrapper(self.logic, None)
             self._populate_companies()
             self._on_company_change()
             QMessageBox.information(self, "Base de Datos", "Nueva base de datos creada correctamente.")
@@ -436,63 +545,105 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Backup", f"Backup guardado en:\n{backup_path}")
 
     def _abrir_configuracion(self):
-        dlg = SettingsWindow(self.logic, self); dlg.exec()
+        backend = self.hybrid_logic if self.hybrid_logic else self.logic
+        dlg = SettingsWindow(backend, self)
+        dlg.exec()
 
     def _abrir_gestion_empresas(self):
-        dlg = CompanyManagementWindow(self, self.logic); dlg.exec()
-        # Si cambian empresas, repoblar
+        backend = self.hybrid_logic if self.hybrid_logic else self.logic
+        dlg = CompanyManagementWindow(self, backend)
+        dlg.exec()
         self._populate_companies()
         self._on_company_change()
 
+    def _abrir_configuracion_firebase(self):
+        from dialogs.firebase_config_dialog import FirebaseConfigDialog
+        dialog = FirebaseConfigDialog(self)
+        dialog.exec()
+
     def _abrir_gestion_items(self):
-        dlg = ItemsManagementWindow(self); dlg.exec()
+        backend = self.hybrid_logic if self.hybrid_logic else self.logic
+        dlg = ItemsManagementWindow(self, backend=backend)
+        dlg.exec()
 
     def _abrir_dialogo_migracion(self):
-        """Abre el diálogo de migración SQLite → Firebase"""
         from dialogs.migration_dialog import MigrationDialog
-        
         dialog = MigrationDialog(self)
         dialog.exec()
-    
+
     def _abrir_configuracion_ncf(self):
-        """Abre el diálogo de configuración de secuencias NCF"""
         from dialogs.ncf_config_dialog import NCFConfigDialog
-        
-        # PASAR EL BACKEND CORRECTO (híbrido si existe)
         backend = self.hybrid_logic if self.hybrid_logic else self.logic
         dialog = NCFConfigDialog(backend, self)
         dialog.exec()
 
-    # --------- Empresas ----------
     def _populate_companies(self):
-        self.company_selector.clear()
-        
-        # Use data_access if available, otherwise fallback to logic
-        if self.data_access:
-            companies = self.data_access.get_all_companies()
-        else:
-            companies = self.logic.get_all_companies()
-        
-        self.companies = {str(c['name']): c for c in companies}
-        self.company_selector.addItems(self.companies.keys())
+        try:
+            if self.hybrid_logic and hasattr(self.hybrid_logic, 'get_all_companies'):
+                companies = self.hybrid_logic.get_all_companies() or []
+            elif self.data_access and hasattr(self.data_access, 'get_all_companies'):
+                companies = self.data_access.get_all_companies() or []
+            elif self.logic and hasattr(self.logic, 'get_all_companies'):
+                companies = self.logic.get_all_companies() or []
+            else:
+                companies = []
+        except Exception as e:
+            print(f"[MainWindow] Error obteniendo companies: {e}")
+            companies = []
+
+        try:
+            self.companies = {str(c.get('name')): c for c in (companies or []) if c.get('name')}
+        except Exception:
+            self.companies = {}
+
+        if hasattr(self, 'topbar'):
+            try:
+                self.topbar.blockSignals(True)
+            except Exception:
+                pass
+            try:
+                if hasattr(self.topbar, "set_companies"):
+                    self.topbar.set_companies(list(self.companies.keys()))
+            except Exception as e:
+                print(f"[MainWindow] topbar.set_companies error: {e}")
+            finally:
+                try:
+                    self.topbar.blockSignals(False)
+                except Exception:
+                    pass
 
     def _on_company_change(self):
-        # Notifica a las pestañas
-        self.invoice_tab.on_company_change()
-        self.quotation_tab.on_company_change()
-        self.invoice_history_tab.refresh()
-        self.quotation_history_tab.refresh()
+        if hasattr(self, "invoice_tab"):
+            try:
+                self.invoice_tab.on_company_change()
+            except Exception as e:
+                print(f"[MainWindow] invoice_tab.on_company_change error: {e}")
+        if hasattr(self, "quotation_tab"):
+            try:
+                self.quotation_tab.on_company_change()
+            except Exception as e:
+                print(f"[MainWindow] quotation_tab.on_company_change error: {e}")
+        if hasattr(self, "invoice_history_tab"):
+            try:
+                self.invoice_history_tab.refresh()
+            except Exception as e:
+                print(f"[MainWindow] invoice_history_tab.refresh error: {e}")
+        if hasattr(self, "quotation_history_tab"):
+            try:
+                self.quotation_history_tab.refresh()
+            except Exception as e:
+                print(f"[MainWindow] quotation_history_tab.refresh error: {e}")
 
-    # Helper para obtener la empresa actual desde cualquier lugar
     def get_current_company(self):
-        return self.companies.get(self.company_selector.currentText())
+        try:
+            company_name = self.topbar.get_current_company() if hasattr(self, 'topbar') else ""
+            if not company_name:
+                return None
+            return (self.companies or {}).get(company_name)
+        except Exception:
+            return None
 
-    # --- Compatibilidad: algunos diálogos llaman MainWindow.get_all_companies() ---
     def get_all_companies(self):
-        """
-        Delegado de compatibilidad para obtener empresas desde la ventana principal.
-        Intenta híbrido, luego data_access, luego logic.
-        """
         try:
             if self.hybrid_logic and hasattr(self.hybrid_logic, "get_all_companies"):
                 return self.hybrid_logic.get_all_companies() or []
@@ -510,7 +661,6 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] logic get_all_companies error: {e}")
         return []
 
-    # Menú: abrir editor de plantillas para la empresa seleccionada
     def _menu_edit_template(self):
         company = self.get_current_company()
         if not company:
@@ -528,61 +678,48 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Plantilla", "Plantilla guardada correctamente.")
         except Exception as e:
             QMessageBox.critical(self, "Plantilla", f"No se pudo abrir el editor de plantillas:\n{e}")
+
     def _setup_connection_status(self):
-        """Configura la barra de estado de conexión."""
-        # Crear barra de estado
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
-        
-        # Crear widget de estado de conexión
+
         self.connection_status = ConnectionStatusBar(self)
-        
-        # Configurar estado inicial (SQLite por defecto)
         db_path = facot_config.get_db_path()
         self.connection_status.set_mode("SQLITE", db_path)
-        
-        # Conectar señales
+
         self.connection_status.database_changed.connect(self._on_database_changed)
         self.connection_status.mode_changed.connect(self._on_connection_mode_changed)
-        
-        # Agregar a la barra de estado
+
         status_bar.addPermanentWidget(self.connection_status)
-    
+
     def _check_online_status(self):
-        """Verifica si hay conexión a internet."""
-        # Crear network manager
         self.network_manager = QNetworkAccessManager(self)
         self.network_manager.finished.connect(self._on_network_check_finished)
-        
-        # Hacer request a un servidor confiable
         request = QNetworkRequest(QUrl("https://www.google.com"))
-        request.setTransferTimeout(3000)  # 3 segundos timeout
+        request.setTransferTimeout(3000)
         self.network_manager.get(request)
-    
+
     def _on_network_check_finished(self, reply):
-        """Callback cuando se completa la verificación de red."""
         is_online = (reply.error() == 0)
-        self.connection_status.set_online_status(is_online)
+        try:
+            self.connection_status.set_online_status(is_online)
+        except Exception:
+            pass
         reply.deleteLater()
-    
+
     def _detect_and_set_connection_mode(self):
-        """
-        Detecta si se está usando Firebase y actualiza el widget de estado.
-        """
         try:
             from data_access import get_current_mode, DataAccessMode
             from firebase import get_firebase_client
-            
-            # Verificar si data_access es realmente FirebaseDataAccess
+
             is_using_firebase = (
-                self.data_access is not None and 
+                self.data_access is not None and
                 "Firebase" in type(self.data_access).__name__
             )
-            
-            # Verificar si Firebase está disponible
+
             firebase_client = get_firebase_client()
             firebase_available = firebase_client.is_available()
-            
+
             if is_using_firebase and firebase_available:
                 self.current_access_mode = "FIREBASE"
                 self.connection_status.set_mode("FIREBASE")
@@ -593,150 +730,182 @@ class MainWindow(QMainWindow):
                 db_path = facot_config.get_db_path()
                 self.connection_status.set_mode("SQLITE", db_path)
                 print(f"[MAIN] Using SQLite mode: {db_path}")
-                
+
         except Exception as e:
             print(f"[MAIN] Error detecting connection mode: {e}")
-            # Fallback to SQLite
             self.current_access_mode = "SQLITE"
             db_path = facot_config.get_db_path()
-            self.connection_status.set_mode("SQLITE", db_path)
-    
+            try:
+                self.connection_status.set_mode("SQLITE", db_path)
+            except Exception:
+                pass
+
     def _on_database_changed(self, new_db_path: str):
-        """
-        Callback cuando el usuario cambia la base de datos.
-        
-        Args:
-            new_db_path: Ruta a la nueva base de datos
-        """
         try:
-            # Actualizar configuración
             facot_config.set_db_path(new_db_path)
-            
-            # Recrear LogicController con nueva base
             self.logic = LogicController(new_db_path)
-            
-            # Recreate data_access with new logic controller
+
             from data_access import get_data_access, DataAccessMode
-            self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+            try:
+                self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+            except TypeError:
+                self.data_access = get_data_access(mode=DataAccessMode.SQLITE)
             self.current_access_mode = "SQLITE"
-            
-            # Actualizar companies
+
+            # Recreate hybrid wrapper
+            self.hybrid_logic = HybridLogicWrapper(self.logic, self.data_access)
+
             self._populate_companies()
-            
-            # Reinyectar lógica en tabs
-            self.invoice_tab.logic = self.logic
-            self.quotation_tab.logic = self.logic
-            self.invoice_history_tab.logic = self.logic
-            self.quotation_history_tab.logic = self.logic
-            
-            # Refrescar
-            self.invoice_tab.on_company_change()
-            self.quotation_tab.on_company_change()
-            self.invoice_history_tab.refresh()
-            self.quotation_history_tab.refresh()
-            
-            QMessageBox.information(
-                self,
-                "Base de Datos",
-                f"Base de datos cambiada exitosamente:\n{os.path.basename(new_db_path)}"
-            )
-            
+
+            try:
+                self.invoice_tab.logic = self.logic
+                self.quotation_tab.logic = self.logic
+                self.invoice_history_tab.logic = self.logic
+                self.quotation_history_tab.logic = self.logic
+            except Exception:
+                pass
+
+            self._on_company_change()
+
+            QMessageBox.information(self, "Base de Datos", f"Base de datos cambiada exitosamente:\n{os.path.basename(new_db_path)}")
+
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"No se pudo cambiar la base de datos:\n{str(e)}"
-            )
-    
+            QMessageBox.critical(self, "Error", f"No se pudo cambiar la base de datos:\n{str(e)}")
+
     def _on_connection_mode_changed(self, new_mode: str):
-        """
-        Callback cuando el usuario cambia el modo de conexión.
-        
-        Args:
-            new_mode: Nuevo modo (SQLITE, FIREBASE, AUTO)
-        """
         try:
             from data_access import set_data_access_mode, DataAccessMode, get_data_access
-            
-            # Mapear string a enum
+
             mode_map = {
                 "SQLITE": DataAccessMode.SQLITE,
                 "FIREBASE": DataAccessMode.FIREBASE,
                 "AUTO": DataAccessMode.AUTO
             }
-            
+
             mode = mode_map.get(new_mode.upper())
             if mode:
                 set_data_access_mode(mode)
                 self.current_access_mode = new_mode.upper()
-                
-                # Recreate data_access with new mode
+
                 try:
                     if mode == DataAccessMode.SQLITE:
                         self.data_access = get_data_access(logic_controller=self.logic, mode=mode)
                     elif mode == DataAccessMode.FIREBASE:
                         self.data_access = get_data_access(user_id=None, mode=mode)
-                    else:  # AUTO
+                    else:
                         self.data_access = get_data_access(logic_controller=self.logic, user_id=None, mode=mode)
-                    
-                    # Reload companies with new data access
+
+                    # Recreate hybrid wrapper
+                    self.hybrid_logic = HybridLogicWrapper(self.logic, self.data_access)
+
                     self._populate_companies()
-                    
-                    # Update connection status display
                     self._detect_and_set_connection_mode()
-                    
-                    QMessageBox.information(
-                        self,
-                        "Modo de Conexión",
-                        f"Modo de conexión cambiado a: {new_mode}\n\n"
-                        f"La aplicación ahora usará {new_mode} para acceder a los datos."
-                    )
+
+                    QMessageBox.information(self, "Modo de Conexión", f"Modo de conexión cambiado a: {new_mode}\n\nLa aplicación ahora usará {new_mode} para acceder a los datos.")
                 except Exception as e:
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        f"No se pudo cambiar al modo {new_mode}:\n{str(e)}\n\n"
-                        "Revirtiendo a SQLite."
-                    )
-                    # Revert to SQLite
+                    QMessageBox.critical(self, "Error", f"No se pudo cambiar al modo {new_mode}:\n{str(e)}\n\nRevirtiendo a SQLite.")
                     set_data_access_mode(DataAccessMode.SQLITE)
                     self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+                    self.hybrid_logic = HybridLogicWrapper(self.logic, self.data_access)
                     self.current_access_mode = "SQLITE"
                     self._detect_and_set_connection_mode()
-                
-                # Si se cambió a Firebase o AUTO, verificar que esté configurado
+
                 if new_mode in ["FIREBASE", "AUTO"]:
                     self._check_firebase_availability()
-        
+
         except ImportError:
-            QMessageBox.warning(
-                self,
-                "Modo de Conexión",
-                "El módulo de Firebase no está disponible.\n"
-                "Solo se puede usar SQLite."
-            )
-    
+            QMessageBox.warning(self, "Modo de Conexión", "El módulo de Firebase no está disponible.\nSolo se puede usar SQLite.")
+
     def _check_firebase_availability(self):
-        """Verifica si Firebase está disponible y configurado."""
         try:
             from firebase import get_firebase_client
-            
             client = get_firebase_client()
             if not client.is_available():
-                QMessageBox.warning(
-                    self,
-                    "Firebase",
-                    "Firebase no está disponible o no está configurado correctamente.\n\n"
-                    "Verifique que:\n"
-                    "1. firebase-admin esté instalado (pip install firebase-admin)\n"
-                    "2. El archivo de credenciales exista\n"
-                    "3. Las credenciales sean válidas\n\n"
-                    "La aplicación usará SQLite como fallback."
-                )
+                QMessageBox.warning(self, "Firebase", "Firebase no está disponible o no está configurado correctamente.\n\nVerifique que:\n1. firebase-admin esté instalado (pip install firebase-admin)\n2. El archivo de credenciales exista\n3. Las credenciales sean válidas\n\nLa aplicación usará SQLite como fallback.")
         except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Firebase",
-                f"Error al verificar Firebase:\n{str(e)}\n\n"
-                "La aplicación usará SQLite como fallback."
-            )
+            QMessageBox.warning(self, "Firebase", f"Error al verificar Firebase:\n{str(e)}\n\nLa aplicación usará SQLite como fallback.")
+
+
+# Small launcher dialog for configuration (kept near MainWindow for cohesion)
+class ConfigLauncherDialog(QDialog):
+    def __init__(self, parent=None, logic=None, hybrid_logic=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configuración")
+        self.setMinimumWidth(420)
+        self.logic = logic
+        self.hybrid_logic = hybrid_logic
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>Configuración</b>"))
+        layout.addSpacing(8)
+
+        btn_appearance = QPushButton("Apariencia")
+        btn_appearance.clicked.connect(self._open_appearance)
+        layout.addWidget(btn_appearance)
+
+        btn_companies = QPushButton("Gestionar Empresas")
+        btn_companies.clicked.connect(self._open_companies)
+        layout.addWidget(btn_companies)
+
+        btn_paths = QPushButton("Rutas y Archivos")
+        btn_paths.clicked.connect(self._open_paths)
+        layout.addWidget(btn_paths)
+
+        btn_ncf = QPushButton("Configurar Secuencias NCF")
+        btn_ncf.clicked.connect(self._open_ncf)
+        layout.addWidget(btn_ncf)
+
+        btn_firebase = QPushButton("Configurar Firebase")
+        btn_firebase.clicked.connect(self._open_firebase)
+        layout.addWidget(btn_firebase)
+
+        layout.addStretch(1)
+        btn_close = QPushButton("Cerrar")
+        btn_close.clicked.connect(self.accept)
+        h = QHBoxLayout()
+        h.addStretch(1)
+        h.addWidget(btn_close)
+        layout.addLayout(h)
+
+    def _open_appearance(self):
+        try:
+            backend = self.hybrid_logic if self.hybrid_logic else self.logic
+            dlg = SettingsWindow(backend, self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo abrir Apariencia:\n{e}")
+
+    def _open_companies(self):
+        try:
+            backend = self.hybrid_logic if self.hybrid_logic else self.logic
+            dlg = CompanyManagementWindow(self, backend)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Empresas", f"No se pudo abrir gestión de empresas:\n{e}")
+
+    def _open_paths(self):
+        try:
+            backend = self.hybrid_logic if self.hybrid_logic else self.logic
+            dlg = SettingsWindow(backend, self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo abrir Rutas y Archivos:\n{e}")
+
+    def _open_ncf(self):
+        try:
+            backend = self.hybrid_logic if self.hybrid_logic else self.logic
+            from dialogs.ncf_config_dialog import NCFConfigDialog
+            dlg = NCFConfigDialog(backend, self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "NCF", f"No se pudo abrir configuración NCF:\n{e}")
+
+    def _open_firebase(self):
+        try:
+            from dialogs.firebase_config_dialog import FirebaseConfigDialog
+            dlg = FirebaseConfigDialog(self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Firebase", f"No se pudo abrir configuración Firebase:\n{e}")

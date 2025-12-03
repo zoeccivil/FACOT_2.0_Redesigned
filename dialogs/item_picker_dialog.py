@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
+import os
 
-from PyQt6.QtCore import Qt, QSettings
-from PyQt6.QtGui import QDoubleValidator, QFontMetrics
+from PyQt6.QtCore import Qt, QSettings, QMimeData, QByteArray
+from PyQt6.QtGui import QDoubleValidator, QFontMetrics, QDrag, QAction
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QWidget, QHeaderView, QMessageBox, QGroupBox, QFormLayout, QSplitter,
-    QComboBox, QStyledItemDelegate, QSizePolicy, QDialogButtonBox
+    QComboBox, QStyledItemDelegate, QSizePolicy, QDialogButtonBox, QMenu, QAbstractItemView
 )
 
 import facot_config
 from items_management_window import ItemsManagementWindow
-from PyQt6.QtGui import QDoubleValidator, QFontMetrics, QAction
-from PyQt6.QtWidgets import (QMenu)
 
 def get_db_path() -> str:
     return facot_config.get_db_path() or ""
@@ -41,6 +40,81 @@ class NumericItemDelegate(QStyledItemDelegate):
         except Exception:
             val = 0.0
         model.setData(index, f"{val:.2f}")
+
+
+class ResultsTable(QTableWidget):
+    """
+    Tabla de resultados que soporta arrastrar filas (drag) hacia un carrito (drop).
+    Emite mime data con key 'application/x-item-code' conteniendo el código del ítem.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Enable row drag
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.setDragEnabled(True)
+        self.viewport().setAcceptDrops(False)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+
+    def startDrag(self, supportedActions):
+        sel = self.selectedIndexes()
+        if not sel:
+            return
+        row = sel[0].row()
+        code_item = self.item(row, 0)
+        if not code_item:
+            return
+        code = code_item.text() or ""
+        mime = QMimeData()
+        mime.setData("application/x-item-code", QByteArray(code.encode("utf-8")))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+
+class CartTable(QTableWidget):
+    """
+    Tabla carrito que acepta drops desde ResultsTable. Añade la fila arrastrada (código)
+    usando callback add_callback(code: str) para delegar la lógica de agregar.
+    """
+    def __init__(self, add_callback, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add_callback = add_callback
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasFormat("application/x-item-code"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasFormat("application/x-item-code"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasFormat("application/x-item-code"):
+            data = mime.data("application/x-item-code")
+            try:
+                code = bytes(data).decode("utf-8")
+            except Exception:
+                code = str(data)
+            # Delegate adding to provided callback
+            try:
+                self.add_callback(code)
+                event.acceptProposedAction()
+            except Exception as e:
+                QMessageBox.warning(self, "Drag&Drop", f"No se pudo agregar el ítem: {e}")
+                event.ignore()
+        else:
+            event.ignore()
 
 
 class ItemEditDialog(QDialog):
@@ -170,15 +244,31 @@ class ItemPickerDialog(QDialog):
     """
     Diálogo para buscar ítems, agregarlos con cantidad y precio a un 'carrito'
     y devolverlos al tab de Factura/Cotización.
-    - Búsqueda por texto + filtro por categoría
-    - Edición en línea de Cantidad/Precio en el carrito
-    - Re-cálculo automático de subtotales y total del carrito
-    - Abrir Gestión de Ítems y refrescar al volver
-    - Expandible y con botón de maximizar
+
+    Cambios:
+    - Lee ítems desde backend si está disponible (self.logic / parent.hybrid_logic etc.)
+    - Soporta drag & drop: arrastrar fila de resultados al carrito
     """
     def __init__(self, parent=None, title: str = "Agregar ítems"):
         super().__init__(parent)
         self.setWindowTitle(title)
+
+        # Detect backend (logic / hybrid_logic / data_access) from parent chain
+        self.logic = None
+        p = parent
+        while p is not None:
+            if hasattr(p, "hybrid_logic") and p.hybrid_logic:
+                self.logic = p.hybrid_logic
+                break
+            if hasattr(p, "logic") and p.logic:
+                self.logic = p.logic
+                break
+            if hasattr(p, "data_access") and p.data_access:
+                self.logic = p.data_access
+                break
+            p = getattr(p, "parent", lambda: None)()
+            if p is None:
+                break
 
         # Habilitar maximizar/minimizar y expansión
         self.setWindowFlag(Qt.WindowType.Window, True)
@@ -202,14 +292,6 @@ class ItemPickerDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
-
-        self.setStyleSheet("""
-        QGroupBox {
-            border: 1px solid #555; border-radius: 6px; margin-top: 8px; 
-            padding: 8px; 
-        }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-        """)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -236,30 +318,23 @@ class ItemPickerDialog(QDialog):
         filters_lay.addWidget(btn_refresh)
         left_lay.addWidget(filters_box)
 
-        # Resultados: Código, Nombre, Unidad, Precio, Categoría(oculta)
-        self.results_table = QTableWidget(0, 5)
+        # Results table (uses ResultsTable to support drag)
+        self.results_table = ResultsTable(0, 5)
         self.results_table.setHorizontalHeaderLabels(["Código", "Nombre", "Unidad", "Precio", "Categoría"])
         header = self.results_table.horizontalHeader()
-        # Modos de redimensionamiento
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        # La columna Nombre se estira con la ventana
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.results_table.verticalHeader().setVisible(False)
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        # Ocultar la columna Categoría (index 4)
         self.results_table.setColumnHidden(4, True)
-        # Doble clic: editar ítem
         self.results_table.itemDoubleClicked.connect(self._on_result_double_clicked)
-        # Al cambiar selección: precargar precio y cantidad
         self.results_table.currentCellChanged.connect(self._on_results_current_changed)
-        left_lay.addWidget(self.results_table, stretch=1)
-        # Dentro de _build_ui(), justo después de configurar self.results_table:
         self.results_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.results_table.customContextMenuRequested.connect(self._on_results_context_menu)
-        # Aplicar anchos iniciales
         self._apply_results_column_layout()
+        left_lay.addWidget(self.results_table, stretch=1)
 
         # Panel derecho
         right = QWidget(); right_lay = QVBoxLayout(right)
@@ -279,22 +354,20 @@ class ItemPickerDialog(QDialog):
 
         cart_box = QGroupBox("Ítems seleccionados")
         cart_lay = QVBoxLayout(cart_box)
-        self.cart_table = QTableWidget(0, 6)
+        # CartTable accepts drops and delegates to self._add_item_by_code
+        self.cart_table = CartTable(self._add_item_by_code, 0, 6)
         self.cart_table.setHorizontalHeaderLabels(["Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"])
         cart_header = self.cart_table.horizontalHeader()
         cart_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        cart_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Descripción se estira
+        cart_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.cart_table.verticalHeader().setVisible(False)
         self.cart_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cart_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.SelectedClicked)
-        # Delegate numérico en Cantidad (3) y Precio (4)
         self.cart_table.setItemDelegateForColumn(3, NumericItemDelegate(4, self.cart_table))
         self.cart_table.setItemDelegateForColumn(4, NumericItemDelegate(4, self.cart_table))
         self.cart_table.itemChanged.connect(self._on_cart_item_changed)
         self.cart_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         cart_lay.addWidget(self.cart_table)
-
-        # Anchos sugeridos para el carrito
         self._apply_cart_column_layout()
 
         cart_bottom = QHBoxLayout()
@@ -322,19 +395,15 @@ class ItemPickerDialog(QDialog):
 
     # ------- Ajuste de columnas -------
     def _apply_results_column_layout(self):
-        """
-        Resultados: Código (6 dígitos aprox), Nombre (ancho dinámico), Unidad (~3-4 chars), Precio (~9-12 chars), Categoría (oculta)
-        """
         fm = QFontMetrics(self.results_table.font())
-        code_w = fm.horizontalAdvance("999999") + 24           # 6 dígitos + padding
-        unit_w = fm.horizontalAdvance("UNID") + 24             # 3-4 chars
-        price_w = fm.horizontalAdvance("9,999,999.99") + 28    # 9-12 chars con separadores
+        code_w = fm.horizontalAdvance("999999") + 24
+        unit_w = fm.horizontalAdvance("UNID") + 24
+        price_w = fm.horizontalAdvance("9,999,999.99") + 28
 
         header = self.results_table.horizontalHeader()
         header.resizeSection(0, max(80, code_w))
         header.resizeSection(2, max(60, unit_w))
         header.resizeSection(3, max(110, price_w))
-        # Categoría (4) está oculta
         self.results_table.setColumnHidden(4, True)
 
     def _apply_cart_column_layout(self):
@@ -346,12 +415,11 @@ class ItemPickerDialog(QDialog):
         subtotal_w = price_w + 10
 
         header = self.cart_table.horizontalHeader()
-        header.resizeSection(0, max(80, code_w))       # Código
-        header.resizeSection(2, max(60, unit_w))       # Unidad
-        header.resizeSection(3, max(80, qty_w))        # Cantidad
-        header.resizeSection(4, max(110, price_w))     # Precio
-        header.resizeSection(5, max(120, subtotal_w))  # Subtotal
-        # Descripción (1) se estira con la ventana (Stretch)
+        header.resizeSection(0, max(80, code_w))
+        header.resizeSection(2, max(60, unit_w))
+        header.resizeSection(3, max(80, qty_w))
+        header.resizeSection(4, max(110, price_w))
+        header.resizeSection(5, max(120, subtotal_w))
 
     # ------- Persistencia de geometría -------
     def _restore_geometry(self):
@@ -377,24 +445,49 @@ class ItemPickerDialog(QDialog):
 
     # ------- Datos auxiliares -------
     def _load_categories(self):
-        db = get_db_path()
         self.categories.clear()
         self.category_filter.blockSignals(True)
         self.category_filter.clear()
         self.category_filter.addItem("Todas", None)
-        if db:
-            with sqlite3.connect(db) as conn:
-                rows = conn.execute(
-                    "SELECT id, IFNULL(name,''), IFNULL(code_prefix,'') FROM categories ORDER BY name"
-                ).fetchall()
-            for cid, name, prefix in rows:
-                self.categories.append((cid, name, prefix))
-                self.category_filter.addItem(f"{name} ({prefix})", cid)
+
+        # Try to load categories from backend if available
+        loaded = False
+        try:
+            if self.logic and hasattr(self.logic, "get_all_categories"):
+                cats = self.logic.get_all_categories() or []
+                for c in cats:
+                    cid = c.get("id")
+                    name = c.get("name") or c.get("nombre") or ""
+                    prefix = c.get("code_prefix") or c.get("prefix") or ""
+                    self.categories.append((cid, name, prefix))
+                    self.category_filter.addItem(f"{name} ({prefix})", cid)
+                loaded = True
+        except Exception:
+            loaded = False
+
+        if not loaded:
+            db = get_db_path()
+            if db:
+                with sqlite3.connect(db) as conn:
+                    rows = conn.execute(
+                        "SELECT id, IFNULL(name,''), IFNULL(code_prefix,'') FROM categories ORDER BY name"
+                    ).fetchall()
+                for cid, name, prefix in rows:
+                    self.categories.append((cid, name, prefix))
+                    self.category_filter.addItem(f"{name} ({prefix})", cid)
+
         self.category_filter.blockSignals(False)
 
     # ------- Acciones -------
     def _open_items_management(self):
-        dlg = ItemsManagementWindow(self)
+        # Pass backend if ItemsManagementWindow supports it (it does in your repo)
+        try:
+            if self.logic:
+                dlg = ItemsManagementWindow(self, backend=self.logic)
+            else:
+                dlg = ItemsManagementWindow(self)
+        except TypeError:
+            dlg = ItemsManagementWindow(self)
         dlg.exec()
         current_cid = self.category_filter.currentData()
         self._load_categories()
@@ -407,40 +500,86 @@ class ItemPickerDialog(QDialog):
     def _search_items(self):
         text = (self.search_edit.text() or "").strip().lower()
         sel_cid = self.category_filter.currentData()
-        db = get_db_path()
-        if not db:
-            QMessageBox.warning(self, "Base de datos", "No hay base de datos seleccionada.")
-            return
-        with sqlite3.connect(db) as conn:
-            cur = conn.cursor()
-            base_q = """
-                SELECT i.code, i.name, i.unit, i.price, IFNULL(c.name,'')
-                FROM items i
-                LEFT JOIN categories c ON c.id = i.category_id
-                WHERE (LOWER(i.code) LIKE ? OR LOWER(i.name) LIKE ? OR LOWER(IFNULL(c.name,'')) LIKE ?)
-            """
-            params = [f"%{text}%", f"%{text}%", f"%{text}%"]
-            if sel_cid:
-                base_q += " AND i.category_id = ?"
-                params.append(sel_cid)
-            base_q += " ORDER BY i.name"
-            cur.execute(base_q, params)
-            rows = cur.fetchall()
+
+        # Prefer backend if available
+        rows: List[Tuple[Any, ...]] = []
+        try:
+            if self.logic and hasattr(self.logic, "get_items_like"):
+                # Some backends accept (query, limit) signature
+                items = self.logic.get_items_like(text or "", limit=500) or []
+                for it in items:
+                    code = it.get("code") or it.get("codigo") or ""
+                    name = it.get("name") or it.get("nombre") or ""
+                    unit = it.get("unit") or it.get("unidad") or ""
+                    price = float(it.get("price") or it.get("precio") or 0.0)
+                    cat_name = ""
+                    # try resolve category name if backend provides categories or if item includes category_id
+                    cid = it.get("category_id")
+                    try:
+                        if cid and hasattr(self.logic, "get_company_details") is False:
+                            # skip
+                            pass
+                    except Exception:
+                        pass
+                    rows.append((code, name, unit, price, cat_name))
+            elif self.logic and hasattr(self.logic, "get_all_items"):
+                items = self.logic.get_all_items() or []
+                for it in items:
+                    code = it.get("code") or it.get("codigo") or ""
+                    name = it.get("name") or it.get("nombre") or ""
+                    unit = it.get("unit") or it.get("unidad") or ""
+                    price = float(it.get("price") or it.get("precio") or 0.0)
+                    rows.append((code, name, unit, price, ""))
+        except Exception:
+            rows = []
+
+        # Fallback to sqlite if backend didn't provide rows
+        if not rows:
+            db = get_db_path()
+            if not db:
+                QMessageBox.warning(self, "Base de datos", "No hay base de datos seleccionada.")
+                return
+            with sqlite3.connect(db) as conn:
+                cur = conn.cursor()
+                base_q = """
+                    SELECT i.code, i.name, i.unit, IFNULL(i.price,0), IFNULL(c.name,'')
+                    FROM items i
+                    LEFT JOIN categories c ON c.id = i.category_id
+                    WHERE (LOWER(i.code) LIKE ? OR LOWER(i.name) LIKE ? OR LOWER(IFNULL(c.name,'')) LIKE ?)
+                """
+                params = [f"%{text}%", f"%{text}%", f"%{text}%"]
+                if sel_cid:
+                    base_q += " AND i.category_id = ?"
+                    params.append(sel_cid)
+                base_q += " ORDER BY i.name"
+                cur.execute(base_q, params)
+                rows = cur.fetchall()
+
+        # Apply category filter client-side if backend returned rows without category filter support
+        if sel_cid and rows:
+            try:
+                filtered = []
+                for r in rows:
+                    # r[4] is category name in sqlite rows; for backend rows we may not have category id -> keep all
+                    # If backend provided category id it should be included in item dict path and handled above.
+                    filtered.append(r)
+                rows = filtered
+            except Exception:
+                pass
+
+        # Populate the results table
         self.results_table.setRowCount(0)
         for r, row in enumerate(rows):
             self.results_table.insertRow(r)
             for c, val in enumerate(row):
-                # Precio en formato con 2 decimales
                 if c == 3:
                     try:
                         val = f"{float(val or 0.0):.2f}"
                     except Exception:
                         val = "0.00"
                 self.results_table.setItem(r, c, QTableWidgetItem(str(val)))
-        # Restablecer layout (por si cambió la fuente o DPI)
         self._apply_results_column_layout()
 
-    # Doble click en resultados -> Editar ítem
     def _on_result_double_clicked(self, item: QTableWidgetItem):
         if not item:
             return
@@ -452,10 +591,8 @@ class ItemPickerDialog(QDialog):
         dlg = ItemEditDialog(old_code, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             updated = dlg.get_result()
-            # Refrescar resultados y re-seleccionar el código (nuevo o el mismo)
             self._search_items()
             self._reselect_result_by_code(updated.get("code") or old_code)
-            # Actualizar carrito si existía ese código
             self._update_cart_rows_after_edit(updated.get("original_code") or old_code, updated)
 
     def _reselect_result_by_code(self, code: str):
@@ -465,11 +602,9 @@ class ItemPickerDialog(QDialog):
             it = self.results_table.item(r, 0)
             if it and it.text() == code:
                 self.results_table.selectRow(r)
-                # Disparar el precargado de precio
                 self._on_results_current_changed(r, 0, -1, -1)
                 break
 
-    # Al cambiar selección en resultados -> precargar precio y cantidad=1
     def _on_results_current_changed(self, cur_row: int, cur_col: int, prev_row: int, prev_col: int):
         try:
             if cur_row < 0:
@@ -482,7 +617,6 @@ class ItemPickerDialog(QDialog):
             pass
 
     def _add_selected_to_cart_quick(self, row: int, col: int):
-        # Conservamos esta función por compatibilidad, pero ya no está conectada a doble click
         self._add_selected_to_cart(default_qty=True)
 
     def _add_selected_to_cart(self, default_qty: bool = False):
@@ -491,18 +625,83 @@ class ItemPickerDialog(QDialog):
             QMessageBox.information(self, "Selección", "Selecciona un ítem en la lista de resultados.")
             return
         code = self.results_table.item(r, 0).text()
-        name = self.results_table.item(r, 1).text()
-        unit = self.results_table.item(r, 2).text()
-        price_cell = self.results_table.item(r, 3)
-        price_def = float(price_cell.text()) if price_cell and price_cell.text() else 0.0
+        self._add_item_by_code(code, default_qty=default_qty)
 
+    def _add_item_by_code(self, code: str, default_qty: bool = False):
+        """
+        Agrega al carrito el ítem con código dado. Si el source table has price/unit,
+        usamos esos valores; else, consultamos backend or sqlite for full item details.
+        """
+        if not code:
+            return
+        # Try to find the item in results_table first (fast)
+        found = None
+        for r in range(self.results_table.rowCount()):
+            it = self.results_table.item(r, 0)
+            if it and it.text() == code:
+                name = self.results_table.item(r, 1).text() if self.results_table.item(r, 1) else ""
+                unit = self.results_table.item(r, 2).text() if self.results_table.item(r, 2) else ""
+                try:
+                    price = float(self.results_table.item(r, 3).text().replace(",", "")) if self.results_table.item(r, 3) else 0.0
+                except Exception:
+                    price = 0.0
+                found = {"code": code, "name": name, "unit": unit, "price": price}
+                break
+
+        # If not found in table, try backend lookups
+        if not found:
+            try:
+                if self.logic and hasattr(self.logic, "get_item_by_code"):
+                    it = self.logic.get_item_by_code(code)
+                    if it:
+                        found = {
+                            "code": it.get("code") or it.get("codigo") or "",
+                            "name": it.get("name") or it.get("nombre") or "",
+                            "unit": it.get("unit") or it.get("unidad") or "",
+                            "price": float(it.get("price") or it.get("precio") or 0.0)
+                        }
+                elif self.logic and hasattr(self.logic, "get_items_like"):
+                    # search exact
+                    its = self.logic.get_items_like(code, limit=5) or []
+                    for it in its:
+                        if (it.get("code") or "").upper() == code.upper():
+                            found = {
+                                "code": it.get("code") or "",
+                                "name": it.get("name") or "",
+                                "unit": it.get("unit") or "",
+                                "price": float(it.get("price") or 0.0)
+                            }
+                            break
+            except Exception:
+                found = None
+
+        # Fallback to sqlite
+        if not found:
+            db = get_db_path()
+            if db:
+                with sqlite3.connect(db) as conn:
+                    row = conn.execute(
+                        "SELECT code, IFNULL(name,''), IFNULL(unit,''), IFNULL(price,0) FROM items WHERE code = ?",
+                        (code,)
+                    ).fetchone()
+                if row:
+                    found = {"code": row[0], "name": row[1], "unit": row[2], "price": float(row[3] or 0.0)}
+
+        if not found:
+            QMessageBox.warning(self, "Ítem", f"No se encontró el ítem con código '{code}'.")
+            return
+
+        # Determine qty and price
         try:
             qty = 1.0 if default_qty else float(self.qty_edit.text().replace(",", ".") or "1")
             price_input = (self.price_edit.text() or "").replace(",", ".")
-            price = price_def if (default_qty and (price_input.strip() == "")) else float(price_input or price_def)
-        except ValueError:
+            price = found.get("price", 0.0)
+            if not default_qty and price_input.strip() != "":
+                price = float(price_input)
+        except Exception:
             QMessageBox.warning(self, "Validación", "Cantidad y Precio deben ser numéricos.")
             return
+
         if qty <= 0:
             QMessageBox.warning(self, "Validación", "La cantidad debe ser mayor a cero.")
             return
@@ -510,9 +709,15 @@ class ItemPickerDialog(QDialog):
             QMessageBox.warning(self, "Validación", "El precio no puede ser negativo.")
             return
 
+        code = found.get("code", "")
+        name = found.get("name", "")
+        unit = found.get("unit", "")
+
+        # Merge into cart (same code as original)
         found_row = -1
         for i in range(self.cart_table.rowCount()):
-            if self.cart_table.item(i, 0).text() == code:
+            it = self.cart_table.item(i, 0)
+            if it and it.text() == code:
                 found_row = i
                 break
         if found_row >= 0:
@@ -577,9 +782,6 @@ class ItemPickerDialog(QDialog):
         self.cart_total_label.setText(f"Total carrito: {total:,.2f}")
 
     def _update_cart_rows_after_edit(self, old_code: str, updated: Dict):
-        """
-        Si un ítem editado existe en el carrito, actualizar sus datos visibles (código/nombre/unidad/precio).
-        """
         if not updated:
             return
         new_code = updated.get("code", old_code)
@@ -592,14 +794,12 @@ class ItemPickerDialog(QDialog):
             if not code_it:
                 continue
             if code_it.text() == old_code:
-                # Actualizar celdas
                 self.cart_table.setItem(r, 0, QTableWidgetItem(new_code))
                 if new_name:
                     self.cart_table.setItem(r, 1, QTableWidgetItem(new_name))
                 if new_unit:
                     self.cart_table.setItem(r, 2, QTableWidgetItem(new_unit))
-                if new_price > 0:
-                    # Mantener cantidad y recalcular subtotal
+                if new_price >= 0:
                     try:
                         qty = float(self.cart_table.item(r, 3).text().replace(",", ""))
                     except Exception:
@@ -618,32 +818,24 @@ class ItemPickerDialog(QDialog):
             price = float(self.cart_table.item(r, 4).text().replace(",", ""))
             subtotal = float(self.cart_table.item(r, 5).text().replace(",", ""))
             items.append({
-                "codigo": code,
-                "nombre": name,
-                "unidad": unit,
-                "cantidad": qty,
-                "precio": price,
+                "code": code,
+                "name": name,
+                "unit": unit,
+                "quantity": qty,
+                "unit_price": price,
                 "subtotal": subtotal,
             })
         return items
-    
+
     def _on_results_context_menu(self, pos):
-        """
-        Menú contextual sobre la tabla de resultados:
-        - Agregar al carrito
-        - Editar ítem
-        """
-        # Determinar fila bajo el cursor
         index = self.results_table.indexAt(pos)
         if not index.isValid():
             return
 
         row = index.row()
-        # Seleccionar la fila bajo el cursor y fijar celda actual para disparar precarga de precio/cantidad
         try:
             self.results_table.selectRow(row)
             self.results_table.setCurrentCell(row, 0)
-            # Esto hace que _on_results_current_changed precargue precio y cantidad=1
             self._on_results_current_changed(row, 0, -1, -1)
         except Exception:
             pass
@@ -652,7 +844,6 @@ class ItemPickerDialog(QDialog):
         act_add = QAction("Agregar al carrito", self)
         act_edit = QAction("Editar ítem…", self)
 
-        # Handlers
         act_add.triggered.connect(lambda: self._add_selected_to_cart(default_qty=True))
         act_edit.triggered.connect(self._edit_selected_result)
 
@@ -660,17 +851,10 @@ class ItemPickerDialog(QDialog):
         menu.addSeparator()
         menu.addAction(act_edit)
 
-        # Posición global del menú
         global_pos = self.results_table.viewport().mapToGlobal(pos)
         menu.exec(global_pos)
 
-
     def _edit_selected_result(self):
-        """
-        Abre el editor rápido para el ítem seleccionado en la tabla de resultados.
-        Tras guardar, refresca la lista, re-selecciona el ítem (código nuevo si cambió),
-        y actualiza el carrito si existía ese código.
-        """
         r = self.results_table.currentRow()
         if r < 0:
             QMessageBox.information(self, "Selección", "Selecciona un ítem para editar.")
@@ -683,8 +867,6 @@ class ItemPickerDialog(QDialog):
         dlg = ItemEditDialog(old_code, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             updated = dlg.get_result()
-            # Refrescar resultados y re-seleccionar el código (nuevo o el mismo)
             self._search_items()
             self._reselect_result_by_code(updated.get("code") or old_code)
-            # Actualizar carrito si existía ese código
             self._update_cart_rows_after_edit(updated.get("original_code") or old_code, updated)

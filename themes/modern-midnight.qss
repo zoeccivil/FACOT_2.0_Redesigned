@@ -1,1 +1,4 @@
-QMainWindow{background-color:#0F1115;}
+/* Modern Midnight Override
+   All logic is now in style_template.qss handled by JSON tokens.
+   Keep this file empty or use for very specific hacks only.
+*/

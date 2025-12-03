@@ -1,155 +1,410 @@
+# (reemplaza el archivo settings_window.py por este)
+from __future__ import annotations
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QComboBox, QLineEdit, QPushButton, QFileDialog,
-    QHBoxLayout, QListWidget, QMessageBox, QInputDialog
+    QHBoxLayout, QMessageBox, QGroupBox, QTabWidget, QWidget
 )
+from PyQt6.QtCore import Qt
 import facot_config
 
-class SettingsWindow(QDialog):
-    def __init__(self, logic, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Configuración por Empresa")
-        self.setMinimumSize(600, 600)
-        self.logic = logic  # Debe ser instancia de LogicController
+# Intentional safe import: CompanyManagementWindow may exist or not
+try:
+    from company_management_window import CompanyManagementWindow
+except Exception:
+    CompanyManagementWindow = None
 
+
+class SettingsWindow(QDialog):
+    def __init__(self, backend, parent=None):
+        """
+        backend: puede ser LogicController (SQLite), FirebaseDataAccess, o HybridLogicWrapper.
+                 Se asume que provee get_all_companies() y get_company_details(company_id).
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Configuración")
+        self.setMinimumSize(700, 650)
+        self.backend = backend  # puede ser logic o hybrid wrapper
+
+        # Build UI and load initial data
         self._build_ui()
         self._load_companies()
-        self._load_settings_for_active_company()
+        self._load_settings_for_selected_company()
 
     def _build_ui(self):
+        """Build UI with tabs for organization"""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # Selector de empresa
+        # Tabs for better organization
+        tabs = QTabWidget()
+
+        # Tab 1: Apariencia
+        appearance_tab = self._build_appearance_tab()
+        tabs.addTab(appearance_tab, "Apariencia")
+
+        # Tab 2: Empresa (light summary + launcher to full manager)
+        company_tab = self._build_company_tab()
+        tabs.addTab(company_tab, "Empresa")
+
+        # Tab 3: Rutas y Archivos
+        paths_tab = self._build_paths_tab()
+        tabs.addTab(paths_tab, "Rutas y Archivos")
+
+        # Tab 4: Backups y Firebase
+        advanced_tab = self._build_advanced_tab()
+        tabs.addTab(advanced_tab, "Avanzado")
+
+        layout.addWidget(tabs)
+
+        # Botones de acción
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_save = QPushButton("Guardar")
+        btn_save.clicked.connect(self._save_settings)
+        btn_row.addWidget(btn_save)
+
+        layout.addLayout(btn_row)
+
+    def _build_appearance_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        # Theme selector
+        theme_group = QGroupBox("Tema de la Aplicación")
+        theme_layout = QVBoxLayout(theme_group)
+
+        desc_label = QLabel("Selecciona el tema visual de FACOT:")
+        desc_label.setProperty("muted", True)
+        theme_layout.addWidget(desc_label)
+
+        self.theme_selector = QComboBox()
+        self.theme_selector.setMinimumWidth(300)
+
+        # Load available themes
+        try:
+            from utils.theme_manager import get_available_themes, get_theme_manager
+            self.theme_manager = get_theme_manager()
+            themes = get_available_themes()
+
+            # Add themes to combo
+            # Support dict or list
+            if isinstance(themes, dict):
+                for tid, tname in themes.items():
+                    self.theme_selector.addItem(tname, tid)
+            else:
+                for t in (themes or []):
+                    self.theme_selector.addItem(str(t), t)
+
+            # Select current theme if any
+            current_theme = self.theme_manager.load_saved_theme()
+            if current_theme:
+                for i in range(self.theme_selector.count()):
+                    if self.theme_selector.itemData(i) == current_theme:
+                        self.theme_selector.setCurrentIndex(i)
+                        break
+
+            # Connect change handler
+            self.theme_selector.currentIndexChanged.connect(self._on_theme_changed)
+
+        except Exception as e:
+            QMessageBox.warning(self, "Advertencia", f"No se pudieron cargar los temas: {e}")
+            self.theme_selector.setEnabled(False)
+
+        theme_layout.addWidget(QLabel("Tema:"))
+        theme_layout.addWidget(self.theme_selector)
+
+        themes_info = QLabel(
+            "<b>Modern Midnight:</b> Tema oscuro moderno para uso prolongado<br>"
+            "<b>FACOT Light Pro:</b> Tema claro profesional para ambientes iluminados"
+        )
+        themes_info.setProperty("muted", True)
+        themes_info.setWordWrap(True)
+        theme_layout.addWidget(themes_info)
+
+        layout.addWidget(theme_group)
+        layout.addStretch(1)
+
+        return widget
+
+    def _build_company_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # Company selector
+        sel_row = QHBoxLayout()
+        sel_row.addWidget(QLabel("Empresa:"))
         self.company_selector = QComboBox()
         self.company_selector.currentIndexChanged.connect(self._load_settings_for_selected_company)
-        layout.addWidget(QLabel("Empresa:"))
-        layout.addWidget(self.company_selector)
+        sel_row.addWidget(self.company_selector)
+        layout.addLayout(sel_row)
 
-        # Datos básicos
-        self.name_edit = QLineEdit()
-        self.rnc_edit = QLineEdit()
-        self.address_edit = QLineEdit()
-        layout.addWidget(QLabel("Nombre:")); layout.addWidget(self.name_edit)
-        layout.addWidget(QLabel("RNC:")); layout.addWidget(self.rnc_edit)
-        layout.addWidget(QLabel("Dirección:")); layout.addWidget(self.address_edit)
+        # Basic info (read-only summary)
+        info_row1 = QHBoxLayout()
+        info_row1.addWidget(QLabel("Nombre:"))
+        self.summary_name = QLineEdit()
+        self.summary_name.setReadOnly(True)
+        info_row1.addWidget(self.summary_name)
+        info_row1.addWidget(QLabel("RNC:"))
+        self.summary_rnc = QLineEdit()
+        self.summary_rnc.setReadOnly(True)
+        info_row1.addWidget(self.summary_rnc)
+        layout.addLayout(info_row1)
+
+        info_row2 = QHBoxLayout()
+        info_row2.addWidget(QLabel("Teléfono:"))
+        self.summary_phone = QLineEdit()
+        self.summary_phone.setReadOnly(True)
+        info_row2.addWidget(self.summary_phone)
+        info_row2.addWidget(QLabel("Email:"))
+        self.summary_email = QLineEdit()
+        self.summary_email.setReadOnly(True)
+        info_row2.addWidget(self.summary_email)
+        layout.addLayout(info_row2)
+
+        # Invoice due date summary
+        info_row3 = QHBoxLayout()
+        info_row3.addWidget(QLabel("Vencimiento fijo (facturas):"))
+        self.summary_due = QLineEdit()
+        self.summary_due.setReadOnly(True)
+        info_row3.addWidget(self.summary_due)
+        layout.addLayout(info_row3)
+
+        # Buttons: open full manager and refresh
+        btn_row = QHBoxLayout()
+        btn_open_mgr = QPushButton("Abrir gestor completo de empresas")
+        btn_open_mgr.clicked.connect(self._open_company_manager_full)
+        btn_row.addWidget(btn_open_mgr)
+
+        btn_refresh = QPushButton("Refrescar empresas")
+        btn_refresh.clicked.connect(self._load_companies)
+        btn_row.addWidget(btn_refresh)
+
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        layout.addStretch(1)
+        return widget
+
+    def _build_paths_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # Plantilla de factura
         self.template_edit = QLineEdit()
-        btn_template = QPushButton("Seleccionar plantilla")
+        btn_template = QPushButton("Seleccionar")
         btn_template.clicked.connect(self._select_template)
-        hlayout_template = QHBoxLayout()
-        hlayout_template.addWidget(QLabel("Ruta de plantilla:"))
-        hlayout_template.addWidget(self.template_edit)
-        hlayout_template.addWidget(btn_template)
-        layout.addLayout(hlayout_template)
+
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("Ruta de plantilla:"))
+        template_row.addWidget(self.template_edit, 1)
+        template_row.addWidget(btn_template)
+        layout.addLayout(template_row)
 
         # Carpeta de salida
         self.output_edit = QLineEdit()
-        btn_output = QPushButton("Seleccionar carpeta salida")
+        btn_output = QPushButton("Seleccionar")
         btn_output.clicked.connect(self._select_output)
-        hlayout_output = QHBoxLayout()
-        hlayout_output.addWidget(QLabel("Carpeta de salida:"))
-        hlayout_output.addWidget(self.output_edit)
-        hlayout_output.addWidget(btn_output)
-        layout.addLayout(hlayout_output)
+
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Carpeta de salida:"))
+        output_row.addWidget(self.output_edit, 1)
+        output_row.addWidget(btn_output)
+        layout.addLayout(output_row)
 
         # Carpeta de descargas (origen)
         self.downloads_edit = QLineEdit()
-        btn_downloads = QPushButton("Seleccionar carpeta descargas")
+        btn_downloads = QPushButton("Seleccionar")
         btn_downloads.clicked.connect(self._select_downloads)
-        hlayout_downloads = QHBoxLayout()
-        hlayout_downloads.addWidget(QLabel("Carpeta de descargas:"))
-        hlayout_downloads.addWidget(self.downloads_edit)
-        hlayout_downloads.addWidget(btn_downloads)
-        layout.addLayout(hlayout_downloads)
+
+        downloads_row = QHBoxLayout()
+        downloads_row.addWidget(QLabel("Carpeta de descargas:"))
+        downloads_row.addWidget(self.downloads_edit, 1)
+        downloads_row.addWidget(btn_downloads)
+        layout.addLayout(downloads_row)
 
         # Carpeta de anexos (destino)
         self.attachments_edit = QLineEdit()
-        btn_attachments = QPushButton("Seleccionar carpeta anexos")
+        btn_attachments = QPushButton("Seleccionar")
         btn_attachments.clicked.connect(self._select_attachments)
-        hlayout_attachments = QHBoxLayout()
-        hlayout_attachments.addWidget(QLabel("Carpeta de anexos:"))
-        hlayout_attachments.addWidget(self.attachments_edit)
-        hlayout_attachments.addWidget(btn_attachments)
-        layout.addLayout(hlayout_attachments)
 
-        # Monedas por empresa
-        layout.addWidget(QLabel("Monedas permitidas para esta empresa:"))
-        self.currency_list = QListWidget()
-        layout.addWidget(self.currency_list)
-        btn_add_currency = QPushButton("Añadir moneda")
-        btn_add_currency.clicked.connect(self._add_currency)
-        btn_remove_currency = QPushButton("Eliminar moneda seleccionada")
-        btn_remove_currency.clicked.connect(self._remove_currency)
-        layout.addWidget(btn_add_currency)
-        layout.addWidget(btn_remove_currency)
+        attachments_row = QHBoxLayout()
+        attachments_row.addWidget(QLabel("Carpeta de anexos:"))
+        attachments_row.addWidget(self.attachments_edit, 1)
+        attachments_row.addWidget(btn_attachments)
+        layout.addLayout(attachments_row)
 
-        # Sección de Backups y Firebase
-        layout.addWidget(QLabel(""))  # Espaciador
-        layout.addWidget(QLabel("Backups y Firebase:"))
-        
-        hlayout_backups = QHBoxLayout()
-        btn_backup_now = QPushButton("📦 Crear backup ahora")
+        layout.addStretch(1)
+        return widget
+
+    def _build_advanced_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        # Backups
+        backup_group = QGroupBox("Backups")
+        backup_layout = QVBoxLayout(backup_group)
+
+        btn_backup_now = QPushButton("Crear backup ahora")
         btn_backup_now.clicked.connect(self._create_backup_now)
-        hlayout_backups.addWidget(btn_backup_now)
-        
-        btn_open_backups = QPushButton("📂 Abrir carpeta de backups")
-        btn_open_backups.clicked.connect(self._open_backups_folder)
-        hlayout_backups.addWidget(btn_open_backups)
-        
-        btn_firebase_config = QPushButton("🔥 Configurar Firebase")
-        btn_firebase_config.clicked.connect(self._configure_firebase)
-        hlayout_backups.addWidget(btn_firebase_config)
-        
-        layout.addLayout(hlayout_backups)
+        backup_layout.addWidget(btn_backup_now)
 
-        # Botones de acción
-        btn_save = QPushButton("Guardar configuración")
-        btn_save.clicked.connect(self._save_settings)
-        btn_cancel = QPushButton("Cancelar")
-        btn_cancel.clicked.connect(self.reject)
-        hlayout_action = QHBoxLayout()
-        hlayout_action.addWidget(btn_cancel)
-        hlayout_action.addWidget(btn_save)
-        layout.addLayout(hlayout_action)
+        btn_open_backups = QPushButton("Abrir carpeta de backups")
+        btn_open_backups.clicked.connect(self._open_backups_folder)
+        backup_layout.addWidget(btn_open_backups)
+
+        layout.addWidget(backup_group)
+
+        # Firebase
+        firebase_group = QGroupBox("Firebase")
+        firebase_layout = QVBoxLayout(firebase_group)
+
+        btn_firebase_config = QPushButton("Configurar Firebase")
+        btn_firebase_config.clicked.connect(self._configure_firebase)
+        firebase_layout.addWidget(btn_firebase_config)
+
+        layout.addWidget(firebase_group)
+        layout.addStretch(1)
+
+        return widget
+
+    # -------------------------
+    # Event handlers / helpers
+    # -------------------------
+    def _on_theme_changed(self, index):
+        if not hasattr(self, 'theme_manager'):
+            return
+
+        theme_id = self.theme_selector.itemData(index)
+        if theme_id:
+            try:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app:
+                    self.theme_manager.apply_theme(app, theme_id)
+                    self.theme_manager.save_and_apply_theme(theme_id)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Error al aplicar tema: {e}")
 
     def _load_companies(self):
-        companies = self.logic.get_all_companies()
+        companies = []
+        try:
+            if self.backend and hasattr(self.backend, 'get_all_companies'):
+                companies = self.backend.get_all_companies() or []
+            else:
+                # fallback: try global facot_config logic (rare)
+                companies = []
+        except Exception as e:
+            print(f"[SettingsWindow] get_all_companies error: {e}")
+            companies = []
+
         self.companies = {}
+        self.company_selector.blockSignals(True)
         self.company_selector.clear()
         for c in companies:
-            name = c["name"]
-            rnc = c["rnc"]
-            self.companies[name] = rnc
-            self.company_selector.addItem(name)
-        # Selecciona la empresa activa si existe
+            name = c.get("name") or c.get("nombre") or ""
+            cid = c.get("id") or c.get("pk") or c.get("company_id")
+            if name:
+                self.companies[name] = cid
+                self.company_selector.addItem(name)
+        self.company_selector.blockSignals(False)
+
+        # Select active company if configured
         empresa_activa = facot_config.get_empresa_activa()
         if empresa_activa:
-            for idx, name in enumerate(self.companies):
-                if self.companies[name] == empresa_activa:
+            for idx, name in enumerate(self.companies.keys()):
+                if str(self.companies[name]) == str(empresa_activa):
                     self.company_selector.setCurrentIndex(idx)
                     break
 
     def _load_settings_for_selected_company(self):
-        name = self.company_selector.currentText()
-        company_id = self.companies.get(name)
+        name = self.company_selector.currentText() if hasattr(self, 'company_selector') else ""
+        company_id = self.companies.get(name) if getattr(self, 'companies', None) else None
         if not company_id:
+            try:
+                self.summary_name.setText("")
+                self.summary_rnc.setText("")
+                self.summary_phone.setText("")
+                self.summary_email.setText("")
+                self.summary_due.setText("")
+            except Exception:
+                pass
             return
-        empresa_cfg = facot_config.get_empresa_config(company_id)
-        self.name_edit.setText(empresa_cfg.get("nombre", name))
-        self.rnc_edit.setText(company_id)
-        self.address_edit.setText(empresa_cfg.get("direccion", ""))
-        self.template_edit.setText(empresa_cfg.get("ruta_plantilla", ""))
-        self.output_edit.setText(empresa_cfg.get("carpeta_salida", ""))
-        self.downloads_edit.setText(empresa_cfg.get("carpeta_origen", ""))
-        self.attachments_edit.setText(empresa_cfg.get("carpeta_destino", ""))
-        self.currency_list.clear()
-        for moneda in empresa_cfg.get("monedas", []):
-            self.currency_list.addItem(moneda)
 
-    def _load_settings_for_active_company(self):
-        # Solo para iniciar con la empresa activa
-        self._load_settings_for_selected_company()
+        # Attempt to read minimal details; prefer get_company_details if available
+        try:
+            details = {}
+            if self.backend and hasattr(self.backend, "get_company_details"):
+                details = self.backend.get_company_details(company_id) or {}
+            else:
+                # fallback: attempt to glean from get_all_companies
+                for c in (self.backend.get_all_companies() if self.backend and hasattr(self.backend, 'get_all_companies') else []):
+                    if str(c.get("id")) == str(company_id):
+                        details = c
+                        break
+        except Exception as e:
+            print(f"[SettingsWindow] Error obteniendo detalles empresa: {e}")
+            details = {}
 
+        # Normalize
+        name_val = details.get("name") or details.get("nombre") or ""
+        rnc_val = details.get("rnc") or details.get("rnc_number") or ""
+        phone_val = details.get("phone") or details.get("telefono") or ""
+        email_val = details.get("email") or details.get("correo") or ""
+        due_val = details.get("invoice_due_date") or details.get("invoice_due") or details.get("due_date") or ""
+
+        try:
+            self.summary_name.setText(name_val)
+            self.summary_rnc.setText(rnc_val)
+            self.summary_phone.setText(phone_val)
+            self.summary_email.setText(email_val)
+            self.summary_due.setText(due_val or "N/A")
+        except Exception:
+            pass
+
+    def _open_company_manager_full(self):
+        if CompanyManagementWindow is None:
+            QMessageBox.warning(self, "Empresas", "No se encontró CompanyManagementWindow en este entorno.")
+            return
+
+        try:
+            # open with this dialog as parent so modal relationship is clear
+            # Pass the same backend to the manager so it can persist using the same backend
+            dlg = CompanyManagementWindow(self, self.backend)
+            dlg.exec()
+        except TypeError:
+            try:
+                dlg = CompanyManagementWindow(self, self.backend)
+                dlg.exec()
+            except Exception as e:
+                QMessageBox.critical(self, "Empresas", f"No se pudo abrir gestión de empresas:\n{e}")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Empresas", f"No se pudo abrir gestión de empresas:\n{e}")
+            return
+
+        # After manager closed, refresh list and selection
+        try:
+            self._load_companies()
+            self._load_settings_for_selected_company()
+        except Exception:
+            pass
+
+    # Path selectors used by paths tab
     def _select_template(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Selecciona la plantilla de factura", "", "Archivos Excel (*.xlsx);;Todos los archivos (*)")
         if filename:
@@ -170,109 +425,63 @@ class SettingsWindow(QDialog):
         if folder:
             self.attachments_edit.setText(folder)
 
-    def _add_currency(self):
-        moneda, ok = QInputDialog.getText(self, "Añadir moneda", "Introduce el símbolo de la moneda:")
-        if ok and moneda and moneda.strip():
-            if moneda.upper() not in [self.currency_list.item(i).text() for i in range(self.currency_list.count())]:
-                self.currency_list.addItem(moneda.upper())
-
-    def _remove_currency(self):
-        selected = self.currency_list.currentRow()
-        if selected >= 0:
-            self.currency_list.takeItem(selected)
-
     def _save_settings(self):
-        name = self.company_selector.currentText()
-        company_id = self.companies.get(name)
-        if not company_id:
-            QMessageBox.warning(self, "Error", "No se pudo determinar la empresa activa.")
+        # Theme
+        try:
+            theme_id = self.theme_selector.itemData(self.theme_selector.currentIndex())
+            if theme_id and hasattr(self, 'theme_manager'):
+                self.theme_manager.save_and_apply_theme(theme_id)
+        except Exception:
+            pass
+
+        # Paths
+        try:
+            if hasattr(facot_config, 'set_template_path'):
+                facot_config.set_template_path(self.template_edit.text().strip())
+            if hasattr(facot_config, 'set_output_folder'):
+                facot_config.set_output_folder(self.output_edit.text().strip())
+            if hasattr(facot_config, 'set_downloads_folder_path'):
+                facot_config.set_downloads_folder_path(self.downloads_edit.text().strip())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"No se pudieron guardar rutas: {e}")
             return
-        empresa_cfg = {
-            "nombre": self.name_edit.text(),
-            "direccion": self.address_edit.text(),
-            "ruta_plantilla": self.template_edit.text(),
-            "carpeta_salida": self.output_edit.text(),
-            "carpeta_origen": self.downloads_edit.text(),
-            "carpeta_destino": self.attachments_edit.text(),
-            "monedas": [self.currency_list.item(i).text() for i in range(self.currency_list.count())]
-        }
-        facot_config.set_empresa_config(company_id, empresa_cfg)
-        facot_config.set_empresa_activa(company_id)
+
         QMessageBox.information(self, "Configuración", "Configuración guardada correctamente.")
         self.accept()
 
     def _create_backup_now(self):
-        """Crea un backup manual ahora."""
         try:
             from utils.backups import create_backup
             result = create_backup()
-            
+
             if result['success']:
-                QMessageBox.information(
-                    self,
-                    "Backup completado",
-                    f"Backup creado exitosamente.\n\n"
-                    f"Ubicación: {result.get('backup_path', 'N/A')}\n"
-                    f"Colecciones: {len(result.get('collections', {}))}"
-                )
+                QMessageBox.information(self, "Backup completado", f"Backup creado exitosamente.\n\nUbicación: {result.get('backup_path', 'N/A')}")
             else:
-                QMessageBox.warning(
-                    self,
-                    "Backup con errores",
-                    f"El backup se completó con algunos errores:\n\n"
-                    f"{', '.join(result.get('errors', ['Error desconocido']))}"
-                )
+                QMessageBox.warning(self, "Backup con errores", f"El backup se completó con algunos errores:\n\n{', '.join(result.get('errors', ['Error desconocido']))}")
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error de backup",
-                f"No se pudo crear el backup:\n\n{str(e)}"
-            )
+            QMessageBox.critical(self, "Error de backup", f"No se pudo crear el backup:\n\n{str(e)}")
 
     def _open_backups_folder(self):
-        """Abre la carpeta de backups en el explorador de archivos."""
-        import os
-        import subprocess
-        import platform
-        
+        import os, subprocess, platform
         backup_dir = facot_config.get_backup_config().get('backup_dir', './backups')
         backup_path = os.path.abspath(backup_dir)
-        
-        # Crear la carpeta si no existe
         os.makedirs(backup_path, exist_ok=True)
-        
         try:
             if platform.system() == 'Windows':
                 os.startfile(backup_path)
-            elif platform.system() == 'Darwin':  # macOS
+            elif platform.system() == 'Darwin':
                 subprocess.run(['open', backup_path])
-            else:  # Linux
+            else:
                 subprocess.run(['xdg-open', backup_path])
         except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Error",
-                f"No se pudo abrir la carpeta:\n{backup_path}\n\nError: {str(e)}"
-            )
+            QMessageBox.warning(self, "Error", f"No se pudo abrir la carpeta:\n{backup_path}\n\nError: {e}")
 
     def _configure_firebase(self):
-        """Abre el diálogo de configuración de Firebase."""
         try:
             from dialogs.firebase_config_dialog import FirebaseConfigDialog
-            
             dialog = FirebaseConfigDialog(self)
             result = dialog.exec()
-            
             if result == 1:  # Accepted
-                QMessageBox.information(
-                    self,
-                    "Firebase configurado",
-                    "La configuración de Firebase se ha guardado.\n"
-                    "Los cambios tomarán efecto la próxima vez que inicie la aplicación."
-                )
+                QMessageBox.information(self, "Firebase configurado", "La configuración de Firebase se ha guardado.\nLos cambios tomarán efecto la próxima vez que inicie la aplicación.")
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"No se pudo abrir la configuración de Firebase:\n\n{str(e)}"
-            )
+            QMessageBox.critical(self, "Error", f"No se pudo abrir la configuración de Firebase:\n\n{str(e)}")
