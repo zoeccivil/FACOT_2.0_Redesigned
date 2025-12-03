@@ -159,39 +159,173 @@ class MainWindow(QMainWindow):
             self.hybrid_logic = HybridLogicWrapper(self.logic, None)
 
     def _setup_ui(self):
-        central = QWidget(); layout = QVBoxLayout(central); self.setCentralWidget(central)
-
-        # Selector de empresa
-        self.company_selector = QComboBox()
-        layout.addWidget(QLabel("Empresa:")); layout.addWidget(self.company_selector)
+        """
+        Setup UI con nuevo diseño: Sidebar + Topbar + Content Area
+        Mantiene compatibilidad con lógica existente
+        """
+        from PyQt6.QtWidgets import QTabWidget, QStackedWidget
+        from widgets.sidebar_widget import SidebarWidget
+        from widgets.topbar_widget import TopbarWidget
+        
+        # Widget central con layout horizontal (sidebar + content)
+        central = QWidget()
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        self.setCentralWidget(central)
+        
+        # Sidebar
+        self.sidebar = SidebarWidget()
+        self.sidebar.section_changed.connect(self._on_sidebar_section_changed)
+        main_layout.addWidget(self.sidebar)
+        
+        # Content area (topbar + stacked widget para las vistas)
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        
+        # Topbar
+        self.topbar = TopbarWidget()
+        self.topbar.company_changed.connect(self._on_company_change_from_topbar)
+        self.topbar.new_clicked.connect(self._on_topbar_new)
+        self.topbar.save_clicked.connect(self._on_topbar_save)
+        self.topbar.preview_clicked.connect(self._on_topbar_preview)
+        self.topbar.export_clicked.connect(self._on_topbar_export)
+        self.topbar.filter_clicked.connect(self._on_topbar_filter)
+        content_layout.addWidget(self.topbar)
+        
+        # Stacked widget para las diferentes vistas
+        self.stacked_widget = QStackedWidget()
+        content_layout.addWidget(self.stacked_widget)
+        
+        main_layout.addWidget(content_widget)
+        
+        # Poblar empresas
         self._populate_companies()
-        self.company_selector.currentIndexChanged.connect(self._on_company_change)
-
-        # Función para obtener la empresa actual (las pestañas usan get_current_company inyectado)
-        get_company = lambda: self.companies.get(self.company_selector.currentText())
-
-        # Tabs modulares
-        from PyQt6.QtWidgets import QTabWidget
-        self.tabs = QTabWidget()
-
-        # Usar hybrid_logic en lugar de logic directo
-        # Esto permite que los tabs usen Firebase o SQLite transparentemente
+        
+        # Función para obtener la empresa actual
+        get_company = lambda: self.companies.get(self.topbar.get_current_company())
+        
+        # Crear las vistas (tabs)
         logic_to_pass = self.hybrid_logic if self.hybrid_logic else self.logic
         
         self.invoice_tab = InvoiceTab(logic_to_pass, get_company)
         self.quotation_tab = QuotationTab(logic_to_pass, get_company)
         self.invoice_history_tab = InvoiceHistoryTab(logic_to_pass, get_company)
         self.quotation_history_tab = QuotationHistoryTab(logic_to_pass, get_company)
-
+        
         # Conexiones: refrescar historial al guardar
         self.invoice_tab.invoice_saved.connect(lambda _id: self.invoice_history_tab.refresh())
         self.quotation_tab.quotation_saved.connect(lambda _id: self.quotation_history_tab.refresh())
-
-        self.tabs.addTab(self.invoice_tab, "Factura")
-        self.tabs.addTab(self.quotation_tab, "Cotización")
-        self.tabs.addTab(self.invoice_history_tab, "Historial de Facturas")
-        self.tabs.addTab(self.quotation_history_tab, "Historial de Cotizaciones")
-        layout.addWidget(self.tabs)
+        
+        # Agregar vistas al stacked widget
+        self.stacked_widget.addWidget(self.invoice_tab)  # índice 0
+        self.stacked_widget.addWidget(self.quotation_tab)  # índice 1
+        self.stacked_widget.addWidget(self.invoice_history_tab)  # índice 2
+        self.stacked_widget.addWidget(self.quotation_history_tab)  # índice 3
+        
+        # Placeholder para settings (por ahora vacío, se abre en diálogo)
+        settings_placeholder = QWidget()
+        self.stacked_widget.addWidget(settings_placeholder)  # índice 4
+        
+        # Mapeo de secciones a índices
+        self.section_index_map = {
+            "facturación": 0,
+            "cotizaciones": 1,
+            "historial_facturas": 2,
+            "historial_cotizaciones": 3,
+            "configuración": 4,
+        }
+        
+        # Mapeo de índices a contextos de topbar
+        self.index_context_map = {
+            0: "invoice",
+            1: "quotation",
+            2: "invoice_history",
+            3: "quotation_history",
+            4: "settings",
+        }
+        
+        # Mostrar la primera vista por defecto
+        self.stacked_widget.setCurrentIndex(0)
+        self.topbar.set_context("invoice")
+    
+    def _on_sidebar_section_changed(self, section_name: str):
+        """Maneja el cambio de sección desde el sidebar"""
+        index = self.section_index_map.get(section_name, 0)
+        
+        # Si es configuración, abrir el diálogo en lugar de cambiar vista
+        if section_name == "configuración":
+            self._abrir_configuracion()
+            # Volver a la vista anterior
+            if hasattr(self, '_previous_section_index'):
+                self.stacked_widget.setCurrentIndex(self._previous_section_index)
+            return
+        
+        # Guardar índice anterior
+        self._previous_section_index = self.stacked_widget.currentIndex()
+        
+        # Cambiar vista
+        self.stacked_widget.setCurrentIndex(index)
+        
+        # Actualizar contexto del topbar
+        context = self.index_context_map.get(index, "")
+        self.topbar.set_context(context)
+    
+    def _on_company_change_from_topbar(self, company_name: str):
+        """Maneja cambio de empresa desde el topbar"""
+        self._on_company_change()
+    
+    def _on_topbar_new(self):
+        """Maneja el botón Nuevo del topbar"""
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:  # Invoice
+            self.invoice_tab._limpiar_formulario()
+        elif current_index == 1:  # Quotation
+            self.quotation_tab._limpiar_formulario()
+    
+    def _on_topbar_save(self):
+        """Maneja el botón Guardar del topbar"""
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:  # Invoice
+            self.invoice_tab._guardar_factura()
+        elif current_index == 1:  # Quotation
+            self.quotation_tab._guardar_cotizacion()
+    
+    def _on_topbar_preview(self):
+        """Maneja el botón Vista Previa del topbar"""
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:  # Invoice
+            self.invoice_tab._vista_previa()
+        elif current_index == 1:  # Quotation
+            self.quotation_tab._vista_previa()
+    
+    def _on_topbar_export(self):
+        """Maneja el botón Exportar del topbar"""
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 0:  # Invoice
+            self.invoice_tab._exportar_factura()
+        elif current_index == 1:  # Quotation
+            self.quotation_tab._exportar_cotizacion()
+        elif current_index == 2:  # Invoice History
+            # Exportar seleccionadas o todas
+            pass
+        elif current_index == 3:  # Quotation History
+            # Exportar seleccionadas o todas
+            pass
+    
+    def _on_topbar_filter(self):
+        """Maneja el botón Filtrar del topbar"""
+        current_index = self.stacked_widget.currentIndex()
+        if current_index == 2:  # Invoice History
+            # Mostrar/ocultar filtros
+            if hasattr(self.invoice_history_tab, 'toggle_filters'):
+                self.invoice_history_tab.toggle_filters()
+        elif current_index == 3:  # Quotation History
+            # Mostrar/ocultar filtros
+            if hasattr(self.quotation_history_tab, 'toggle_filters'):
+                self.quotation_history_tab.toggle_filters()
 
     def _setup_menu(self):
         menu_bar = QMenuBar(self); self.setMenuBar(menu_bar)
@@ -443,6 +577,13 @@ class MainWindow(QMainWindow):
         # Si cambian empresas, repoblar
         self._populate_companies()
         self._on_company_change()
+    
+    def _abrir_configuracion_firebase(self):
+        """Abre el diálogo de configuración de Firebase"""
+        from dialogs.firebase_config_dialog import FirebaseConfigDialog
+        
+        dialog = FirebaseConfigDialog(self)
+        dialog.exec()
 
     def _abrir_gestion_items(self):
         dlg = ItemsManagementWindow(self); dlg.exec()
@@ -465,8 +606,7 @@ class MainWindow(QMainWindow):
 
     # --------- Empresas ----------
     def _populate_companies(self):
-        self.company_selector.clear()
-        
+        """Populate companies in topbar selector"""
         # Use data_access if available, otherwise fallback to logic
         if self.data_access:
             companies = self.data_access.get_all_companies()
@@ -474,7 +614,10 @@ class MainWindow(QMainWindow):
             companies = self.logic.get_all_companies()
         
         self.companies = {str(c['name']): c for c in companies}
-        self.company_selector.addItems(self.companies.keys())
+        
+        # Update topbar if it exists
+        if hasattr(self, 'topbar'):
+            self.topbar.set_companies(list(self.companies.keys()))
 
     def _on_company_change(self):
         # Notifica a las pestañas
@@ -485,7 +628,12 @@ class MainWindow(QMainWindow):
 
     # Helper para obtener la empresa actual desde cualquier lugar
     def get_current_company(self):
-        return self.companies.get(self.company_selector.currentText())
+        if hasattr(self, 'topbar'):
+            company_name = self.topbar.get_current_company()
+        else:
+            # Fallback para compatibilidad
+            company_name = self.company_selector.currentText() if hasattr(self, 'company_selector') else ""
+        return self.companies.get(company_name)
 
     # --- Compatibilidad: algunos diálogos llaman MainWindow.get_all_companies() ---
     def get_all_companies(self):

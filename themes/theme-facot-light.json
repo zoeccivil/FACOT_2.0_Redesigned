@@ -1,0 +1,21 @@
+{
+  "id": "facot-light",
+  "name": "FACOT Light Pro",
+  "palette": {
+    "background": "#F7F9FC",
+    "surface": "#FFFFFF",
+    "surface-alt": "#EEF1F5",
+    "foreground": "#1F242C",
+    "foreground-muted": "#5C6673",
+    "primary": "#1464F6",
+    "accent": "#32C5FF",
+    "border": "#D4D9E1",
+    "success": "#1DBF73",
+    "warning": "#E6A100",
+    "error": "#E85050"
+  },
+  "metadata": {
+    "type": "light",
+    "version": "1.0"
+  }
+}

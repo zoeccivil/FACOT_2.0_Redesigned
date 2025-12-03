@@ -80,7 +80,7 @@ def main():
         tm = get_theme_manager()
         tm.set_app(app)
         saved_id = tm.load_saved_theme()
-        theme_to_apply = saved_id or "light"  # default razonable
+        theme_to_apply = saved_id or "modern-midnight"  # Modern Midnight por defecto
         tm.apply_theme(app, theme_to_apply)
         print(f"[THEME] Tema aplicado al inicio: {theme_to_apply}")
     except Exception as e:

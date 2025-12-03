@@ -135,19 +135,20 @@ def get_available_themes() -> Dict[str, str]:
 def _get_saved_theme_id() -> Optional[str]:
     """
     Read saved theme id from facot_config (preferred) or facot_config.json (fallback).
+    Returns "modern-midnight" as default if no theme is saved.
     """
     # Preferred: facot_config.get_theme()
     try:
         if facot_config and hasattr(facot_config, "get_theme"):
             t = facot_config.get_theme()
-            return str(t) if t else None
+            return str(t) if t else "modern-midnight"
     except Exception:
         pass
 
     # Fallback: read facot_config.json
     cfg = _read_json(_FACOT_CONFIG_JSON)
     val = cfg.get("theme")
-    return str(val) if val else None
+    return str(val) if val else "modern-midnight"
 
 
 def _set_saved_theme_id(theme_id: str) -> bool:
@@ -175,7 +176,7 @@ class ThemeManager:
     def set_app(self, qt_app) -> None:
         self._app = qt_app
 
-    def generate_stylesheet(self, theme_selector: str = "light") -> str:
+    def generate_stylesheet(self, theme_selector: str = "modern-midnight") -> str:
         theme_file = _resolve_theme_file(theme_selector)
         if not theme_file:
             return ""
@@ -183,10 +184,15 @@ class ThemeManager:
         vars_map = _flatten_vars_from_theme(theme_json)
         base_qss = _read_text(_BASE_QSS)
         info_qss = _read_text(_INFOFIELDS_QSS)
-        combined = "\n\n".join([base_qss, info_qss]).strip()
+        
+        # Also try to load theme-specific QSS file
+        theme_qss_path = os.path.join(_THEMES_DIR, f"{theme_selector}.qss")
+        theme_specific_qss = _read_text(theme_qss_path) if os.path.exists(theme_qss_path) else ""
+        
+        combined = "\n\n".join(filter(None, [base_qss, info_qss, theme_specific_qss])).strip()
         return _replace_tokens(combined, vars_map) if combined else ""
 
-    def apply_theme(self, qt_app, theme_selector: str = "light") -> None:
+    def apply_theme(self, qt_app, theme_selector: str = "modern-midnight") -> None:
         try:
             if qt_app is None:
                 return
@@ -220,9 +226,9 @@ def get_theme_manager() -> ThemeManager:
     return _default_mgr
 
 
-def generate_stylesheet(theme_selector: str = "light") -> str:
+def generate_stylesheet(theme_selector: str = "modern-midnight") -> str:
     return get_theme_manager().generate_stylesheet(theme_selector)
 
 
-def apply_theme(qt_app, theme_selector: str = "light") -> None:
+def apply_theme(qt_app, theme_selector: str = "modern-midnight") -> None:
     return get_theme_manager().apply_theme(qt_app, theme_selector)

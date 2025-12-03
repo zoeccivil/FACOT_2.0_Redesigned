@@ -1,5 +1,5 @@
 /* ============================================================
-   Modern Midnight Theme - Complete Stylesheet
+   FACOT Light Pro Theme - Complete Stylesheet
    Modern B2B Design with Sidebar + Topbar Layout
    ============================================================ */
 
@@ -48,7 +48,7 @@ QWidget#sidebar QPushButton:pressed {
 }
 
 QWidget#sidebar QPushButton:focus {
-    outline: 2px solid {{accent}};
+    outline: 2px solid {{primary}};
     outline-offset: 2px;
 }
 
@@ -72,11 +72,11 @@ QWidget#topbar QPushButton {
 }
 
 QWidget#topbar QPushButton:hover {
-    background-color: #2E77E6;
+    background-color: #1058D6;
 }
 
 QWidget#topbar QPushButton:pressed {
-    background-color: #2563CC;
+    background-color: #0D4AB8;
 }
 
 QWidget#topbar QPushButton:disabled {
@@ -113,11 +113,11 @@ QPushButton {
 }
 
 QPushButton:hover {
-    background-color: #2E77E6;
+    background-color: #1058D6;
 }
 
 QPushButton:pressed {
-    background-color: #2563CC;
+    background-color: #0D4AB8;
 }
 
 QPushButton:disabled {
@@ -144,7 +144,7 @@ QPushButton[danger="true"] {
 }
 
 QPushButton[danger="true"]:hover {
-    background-color: #E64545;
+    background-color: #D63E3E;
 }
 
 QPushButton[success="true"] {
@@ -152,7 +152,7 @@ QPushButton[success="true"] {
 }
 
 QPushButton[success="true"]:hover {
-    background-color: #28B84D;
+    background-color: #18A85E;
 }
 
 /* ========== Input Fields ========== */
@@ -179,7 +179,7 @@ QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
 
 QLineEdit[error="true"] {
     border-color: {{error}};
-    background-color: #2A1818;
+    background-color: #FFF5F5;
 }
 
 /* ========== ComboBox ========== */
@@ -287,8 +287,8 @@ QTabBar::tab:hover {
 }
 
 QTabBar::tab:selected {
-    color: {{accent}};
-    border-bottom-color: {{accent}};
+    color: {{primary}};
+    border-bottom-color: {{primary}};
     font-weight: 600;
 }
 
@@ -502,7 +502,7 @@ QDateEdit::down-arrow {
 /* ========== ToolTip ========== */
 QToolTip {
     background-color: {{foreground}};
-    color: {{background}};
+    color: {{surface}};
     border: 1px solid {{border}};
     border-radius: 4px;
     padding: 6px 10px;
@@ -556,7 +556,7 @@ QWidget[totalsSection="true"] {
 QWidget[totalsSection="true"] QLabel[totalAmount="true"] {
     font-size: 16pt;
     font-weight: 700;
-    color: {{accent}};
+    color: {{primary}};
 }
 
 /* Filter Row */
@@ -592,5 +592,5 @@ QLineEdit[transparent="true"] {
 }
 
 QLineEdit[transparent="true"]:focus {
-    border-bottom-color: {{accent}};
+    border-bottom-color: {{primary}};
 }
