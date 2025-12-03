@@ -113,6 +113,8 @@ class MainWindow(QMainWindow):
         self.data_access = None  # Will hold DataAccess instance
         self.current_access_mode = "SQLITE"  # Track current mode
         self.hybrid_logic = None  # Will hold HybridLogicWrapper
+        # Asegurar estructura de empresas antes de construir UI
+        self.companies: dict[str, dict] = {}
         self._init_db()
         self._setup_ui()
         self._setup_menu()
@@ -187,6 +189,7 @@ class MainWindow(QMainWindow):
         
         # Topbar
         self.topbar = TopbarWidget()
+        # Conectamos señales PERO aseguramos crear tabs antes de que se emita company_changed
         self.topbar.company_changed.connect(self._on_company_change_from_topbar)
         self.topbar.new_clicked.connect(self._on_topbar_new)
         self.topbar.save_clicked.connect(self._on_topbar_save)
@@ -200,14 +203,14 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self.stacked_widget)
         
         main_layout.addWidget(content_widget)
-        
-        # Poblar empresas
-        self._populate_companies()
-        
-        # Función para obtener la empresa actual
-        get_company = lambda: self.companies.get(self.topbar.get_current_company())
-        
-        # Crear las vistas (tabs)
+
+        # Asegurar dict de empresas inicial vacío para el lambda
+        self.companies = {}
+
+        # Función para obtener la empresa actual (robusta)
+        get_company = lambda: (self.companies or {}).get(self.topbar.get_current_company() or "")
+
+        # Crear las vistas (tabs) ANTES de poblar empresas
         logic_to_pass = self.hybrid_logic if self.hybrid_logic else self.logic
         
         self.invoice_tab = InvoiceTab(logic_to_pass, get_company)
@@ -250,6 +253,12 @@ class MainWindow(QMainWindow):
         # Mostrar la primera vista por defecto
         self.stacked_widget.setCurrentIndex(0)
         self.topbar.set_context("invoice")
+
+        # AHORA poblar empresas (después de crear tabs)
+        self._populate_companies()
+
+        # Inicializar vistas con la empresa actual
+        self._on_company_change()
     
     def _on_sidebar_section_changed(self, section_name: str):
         """Maneja el cambio de sección desde el sidebar"""
@@ -281,38 +290,63 @@ class MainWindow(QMainWindow):
         """Maneja el botón Nuevo del topbar"""
         current_index = self.stacked_widget.currentIndex()
         if current_index == 0:  # Invoice
-            self.invoice_tab._limpiar_formulario()
+            if hasattr(self.invoice_tab, "_limpiar_formulario"):
+                self.invoice_tab._limpiar_formulario()
+            else:
+                self.invoice_tab.on_company_change()
         elif current_index == 1:  # Quotation
-            self.quotation_tab._limpiar_formulario()
+            if hasattr(self.quotation_tab, "_limpiar_formulario"):
+                self.quotation_tab._limpiar_formulario()
+            else:
+                self.quotation_tab.on_company_change()
     
     def _on_topbar_save(self):
         """Maneja el botón Guardar del topbar"""
         current_index = self.stacked_widget.currentIndex()
         if current_index == 0:  # Invoice
-            self.invoice_tab._guardar_factura()
+            if hasattr(self.invoice_tab, "_guardar_factura"):
+                self.invoice_tab._guardar_factura()
+            else:
+                self.invoice_tab._save_invoice()
         elif current_index == 1:  # Quotation
-            self.quotation_tab._guardar_cotizacion()
+            if hasattr(self.quotation_tab, "_guardar_cotizacion"):
+                self.quotation_tab._guardar_cotizacion()
+            else:
+                self.quotation_tab._save_quotation()
     
     def _on_topbar_preview(self):
         """Maneja el botón Vista Previa del topbar"""
         current_index = self.stacked_widget.currentIndex()
         if current_index == 0:  # Invoice
-            self.invoice_tab._vista_previa()
+            if hasattr(self.invoice_tab, "_vista_previa"):
+                self.invoice_tab._vista_previa()
+            else:
+                self.invoice_tab._preview_invoice()
         elif current_index == 1:  # Quotation
-            self.quotation_tab._vista_previa()
+            if hasattr(self.quotation_tab, "_vista_previa"):
+                self.quotation_tab._vista_previa()
+            else:
+                self.quotation_tab._preview_quotation()
     
     def _on_topbar_export(self):
         """Maneja el botón Exportar del topbar"""
         current_index = self.stacked_widget.currentIndex()
         if current_index == 0:  # Invoice
-            self.invoice_tab._exportar_factura()
+            if hasattr(self.invoice_tab, "_exportar_factura"):
+                self.invoice_tab._exportar_factura()
+            else:
+                # no-op aquí; exportación directa puede estar en historial
+                pass
         elif current_index == 1:  # Quotation
-            self.quotation_tab._exportar_cotizacion()
+            if hasattr(self.quotation_tab, "_exportar_cotizacion"):
+                self.quotation_tab._exportar_cotizacion()
+            else:
+                pass
         elif current_index == 2:  # Invoice History
-            # Exportar seleccionadas o todas
+            # Exportar seleccionadas o todas (pendiente)
             pass
         elif current_index == 3:  # Quotation History
-            # Exportar seleccionadas o todas
+            # Exportar seleccionadas o todas (pendiente)
             pass
     
     def _on_topbar_filter(self):
@@ -544,11 +578,12 @@ class MainWindow(QMainWindow):
         if filename:
             facot_config.set_db_path(filename)
             self.logic = LogicController(filename)
-            self._populate_companies()
             # Reinyectar lógica en tabs
-            get_company = lambda: self.companies.get(self.company_selector.currentText())
+            get_company = lambda: (self.companies or {}).get(self.topbar.get_current_company() or "")
             self.invoice_tab.logic = self.logic; self.quotation_tab.logic = self.logic
             self.invoice_history_tab.logic = self.logic; self.quotation_history_tab.logic = self.logic
+            # Actualizar companies y refrescar
+            self._populate_companies()
             self._on_company_change()
             QMessageBox.information(self, "Base de Datos", "Base de datos abierta correctamente.")
 
@@ -620,11 +655,27 @@ class MainWindow(QMainWindow):
             self.topbar.set_companies(list(self.companies.keys()))
 
     def _on_company_change(self):
-        # Notifica a las pestañas
-        self.invoice_tab.on_company_change()
-        self.quotation_tab.on_company_change()
-        self.invoice_history_tab.refresh()
-        self.quotation_history_tab.refresh()
+        # Notifica a las pestañas de forma segura (puede llamarse temprano)
+        if hasattr(self, "invoice_tab"):
+            try:
+                self.invoice_tab.on_company_change()
+            except Exception as e:
+                print(f"[MainWindow] invoice_tab.on_company_change error: {e}")
+        if hasattr(self, "quotation_tab"):
+            try:
+                self.quotation_tab.on_company_change()
+            except Exception as e:
+                print(f"[MainWindow] quotation_tab.on_company_change error: {e}")
+        if hasattr(self, "invoice_history_tab"):
+            try:
+                self.invoice_history_tab.refresh()
+            except Exception as e:
+                print(f"[MainWindow] invoice_history_tab.refresh error: {e}")
+        if hasattr(self, "quotation_history_tab"):
+            try:
+                self.quotation_history_tab.refresh()
+            except Exception as e:
+                print(f"[MainWindow] quotation_history_tab.refresh error: {e}")
 
     # Helper para obtener la empresa actual desde cualquier lugar
     def get_current_company(self):
@@ -632,8 +683,8 @@ class MainWindow(QMainWindow):
             company_name = self.topbar.get_current_company()
         else:
             # Fallback para compatibilidad
-            company_name = self.company_selector.currentText() if hasattr(self, 'company_selector') else ""
-        return self.companies.get(company_name)
+            company_name = ""
+        return (self.companies or {}).get(company_name or "")
 
     # --- Compatibilidad: algunos diálogos llaman MainWindow.get_all_companies() ---
     def get_all_companies(self):
@@ -778,10 +829,7 @@ class MainWindow(QMainWindow):
             self.quotation_history_tab.logic = self.logic
             
             # Refrescar
-            self.invoice_tab.on_company_change()
-            self.quotation_tab.on_company_change()
-            self.invoice_history_tab.refresh()
-            self.quotation_history_tab.refresh()
+            self._on_company_change()
             
             QMessageBox.information(
                 self,
