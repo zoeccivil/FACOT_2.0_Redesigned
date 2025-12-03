@@ -1,22 +1,129 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QComboBox, QLineEdit, QPushButton, QFileDialog,
-    QHBoxLayout, QListWidget, QMessageBox, QInputDialog
+    QHBoxLayout, QListWidget, QMessageBox, QInputDialog, QGroupBox, QTabWidget, QWidget
 )
+from PyQt6.QtCore import Qt
 import facot_config
 
 class SettingsWindow(QDialog):
     def __init__(self, logic, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Configuración por Empresa")
-        self.setMinimumSize(600, 600)
+        self.setWindowTitle("Configuración")
+        self.setMinimumSize(700, 650)
         self.logic = logic  # Debe ser instancia de LogicController
+        self.parent_window = parent  # Store reference to parent for theme updates
 
         self._build_ui()
         self._load_companies()
         self._load_settings_for_active_company()
 
     def _build_ui(self):
+        """Build UI with tabs for organization"""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        # Tabs for better organization
+        tabs = QTabWidget()
+        
+        # Tab 1: Apariencia
+        appearance_tab = self._build_appearance_tab()
+        tabs.addTab(appearance_tab, "Apariencia")
+        
+        # Tab 2: Empresa
+        company_tab = self._build_company_tab()
+        tabs.addTab(company_tab, "Empresa")
+        
+        # Tab 3: Rutas y Archivos
+        paths_tab = self._build_paths_tab()
+        tabs.addTab(paths_tab, "Rutas y Archivos")
+        
+        # Tab 4: Backups y Firebase
+        advanced_tab = self._build_advanced_tab()
+        tabs.addTab(advanced_tab, "Avanzado")
+        
+        layout.addWidget(tabs)
+        
+        # Botones de acción
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+        
+        btn_save = QPushButton("Guardar")
+        btn_save.clicked.connect(self._save_settings)
+        btn_row.addWidget(btn_save)
+        
+        layout.addLayout(btn_row)
+    
+    def _build_appearance_tab(self):
+        """Build appearance settings tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+        
+        # Theme selector
+        theme_group = QGroupBox("Tema de la Aplicación")
+        theme_layout = QVBoxLayout(theme_group)
+        
+        desc_label = QLabel("Selecciona el tema visual de FACOT:")
+        desc_label.setProperty("muted", True)
+        theme_layout.addWidget(desc_label)
+        
+        self.theme_selector = QComboBox()
+        self.theme_selector.setMinimumWidth(300)
+        
+        # Load available themes
+        try:
+            from utils.theme_manager import get_available_themes, get_theme_manager
+            self.theme_manager = get_theme_manager()
+            themes = get_available_themes()
+            
+            # Add themes to combo
+            for theme_id, theme_name in themes.items():
+                self.theme_selector.addItem(theme_name, theme_id)
+            
+            # Select current theme
+            current_theme = self.theme_manager.load_saved_theme()
+            if current_theme:
+                for i in range(self.theme_selector.count()):
+                    if self.theme_selector.itemData(i) == current_theme:
+                        self.theme_selector.setCurrentIndex(i)
+                        break
+            
+            # Connect change handler
+            self.theme_selector.currentIndexChanged.connect(self._on_theme_changed)
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Advertencia", f"No se pudieron cargar los temas: {e}")
+            self.theme_selector.setEnabled(False)
+        
+        theme_layout.addWidget(QLabel("Tema:"))
+        theme_layout.addWidget(self.theme_selector)
+        
+        # Theme descriptions
+        themes_info = QLabel(
+            "<b>Modern Midnight:</b> Tema oscuro moderno para uso prolongado<br>"
+            "<b>FACOT Light Pro:</b> Tema claro profesional para ambientes iluminados"
+        )
+        themes_info.setProperty("muted", True)
+        themes_info.setWordWrap(True)
+        theme_layout.addWidget(themes_info)
+        
+        layout.addWidget(theme_group)
+        layout.addStretch(1)
+        
+        return widget
+    
+    def _build_company_tab(self):
+        """Build company settings tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # Selector de empresa
         self.company_selector = QComboBox()
@@ -40,77 +147,156 @@ class SettingsWindow(QDialog):
         hlayout_template.addWidget(QLabel("Ruta de plantilla:"))
         hlayout_template.addWidget(self.template_edit)
         hlayout_template.addWidget(btn_template)
-        layout.addLayout(hlayout_template)
+        
+        # Selector de empresa
+        self.company_selector = QComboBox()
+        self.company_selector.currentIndexChanged.connect(self._load_settings_for_selected_company)
+        layout.addWidget(QLabel("Seleccionar Empresa:"))
+        layout.addWidget(self.company_selector)
+        
+        # Datos básicos
+        company_group = QGroupBox("Datos de la Empresa")
+        company_layout = QVBoxLayout(company_group)
+        
+        self.name_edit = QLineEdit()
+        self.rnc_edit = QLineEdit()
+        self.address_edit = QLineEdit()
+        
+        company_layout.addWidget(QLabel("Nombre:"))
+        company_layout.addWidget(self.name_edit)
+        company_layout.addWidget(QLabel("RNC:"))
+        company_layout.addWidget(self.rnc_edit)
+        company_layout.addWidget(QLabel("Dirección:"))
+        company_layout.addWidget(self.address_edit)
+        
+        layout.addWidget(company_group)
+        
+        # Monedas
+        currency_group = QGroupBox("Monedas Permitidas")
+        currency_layout = QVBoxLayout(currency_group)
+        
+        self.currency_list = QListWidget()
+        currency_layout.addWidget(self.currency_list)
+        
+        currency_btn_row = QHBoxLayout()
+        btn_add_currency = QPushButton("Añadir moneda")
+        btn_add_currency.clicked.connect(self._add_currency)
+        btn_remove_currency = QPushButton("Eliminar seleccionada")
+        btn_remove_currency.clicked.connect(self._remove_currency)
+        currency_btn_row.addWidget(btn_add_currency)
+        currency_btn_row.addWidget(btn_remove_currency)
+        currency_layout.addLayout(currency_btn_row)
+        
+        layout.addWidget(currency_group)
+        layout.addStretch(1)
+        
+        return widget
+    
+    def _build_paths_tab(self):
+        """Build paths and files tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        # Plantilla de factura
+        self.template_edit = QLineEdit()
+        btn_template = QPushButton("Seleccionar")
+        btn_template.clicked.connect(self._select_template)
+        
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("Ruta de plantilla:"))
+        template_row.addWidget(self.template_edit, 1)
+        template_row.addWidget(btn_template)
+        layout.addLayout(template_row)
 
         # Carpeta de salida
         self.output_edit = QLineEdit()
-        btn_output = QPushButton("Seleccionar carpeta salida")
+        btn_output = QPushButton("Seleccionar")
         btn_output.clicked.connect(self._select_output)
-        hlayout_output = QHBoxLayout()
-        hlayout_output.addWidget(QLabel("Carpeta de salida:"))
-        hlayout_output.addWidget(self.output_edit)
-        hlayout_output.addWidget(btn_output)
-        layout.addLayout(hlayout_output)
+        
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Carpeta de salida:"))
+        output_row.addWidget(self.output_edit, 1)
+        output_row.addWidget(btn_output)
+        layout.addLayout(output_row)
 
         # Carpeta de descargas (origen)
         self.downloads_edit = QLineEdit()
-        btn_downloads = QPushButton("Seleccionar carpeta descargas")
+        btn_downloads = QPushButton("Seleccionar")
         btn_downloads.clicked.connect(self._select_downloads)
-        hlayout_downloads = QHBoxLayout()
-        hlayout_downloads.addWidget(QLabel("Carpeta de descargas:"))
-        hlayout_downloads.addWidget(self.downloads_edit)
-        hlayout_downloads.addWidget(btn_downloads)
-        layout.addLayout(hlayout_downloads)
+        
+        downloads_row = QHBoxLayout()
+        downloads_row.addWidget(QLabel("Carpeta de descargas:"))
+        downloads_row.addWidget(self.downloads_edit, 1)
+        downloads_row.addWidget(btn_downloads)
+        layout.addLayout(downloads_row)
 
         # Carpeta de anexos (destino)
         self.attachments_edit = QLineEdit()
-        btn_attachments = QPushButton("Seleccionar carpeta anexos")
+        btn_attachments = QPushButton("Seleccionar")
         btn_attachments.clicked.connect(self._select_attachments)
-        hlayout_attachments = QHBoxLayout()
-        hlayout_attachments.addWidget(QLabel("Carpeta de anexos:"))
-        hlayout_attachments.addWidget(self.attachments_edit)
-        hlayout_attachments.addWidget(btn_attachments)
-        layout.addLayout(hlayout_attachments)
-
-        # Monedas por empresa
-        layout.addWidget(QLabel("Monedas permitidas para esta empresa:"))
-        self.currency_list = QListWidget()
-        layout.addWidget(self.currency_list)
-        btn_add_currency = QPushButton("Añadir moneda")
-        btn_add_currency.clicked.connect(self._add_currency)
-        btn_remove_currency = QPushButton("Eliminar moneda seleccionada")
-        btn_remove_currency.clicked.connect(self._remove_currency)
-        layout.addWidget(btn_add_currency)
-        layout.addWidget(btn_remove_currency)
-
-        # Sección de Backups y Firebase
-        layout.addWidget(QLabel(""))  # Espaciador
-        layout.addWidget(QLabel("Backups y Firebase:"))
         
-        hlayout_backups = QHBoxLayout()
-        btn_backup_now = QPushButton("📦 Crear backup ahora")
+        attachments_row = QHBoxLayout()
+        attachments_row.addWidget(QLabel("Carpeta de anexos:"))
+        attachments_row.addWidget(self.attachments_edit, 1)
+        attachments_row.addWidget(btn_attachments)
+        layout.addLayout(attachments_row)
+        
+        layout.addStretch(1)
+        return widget
+    
+    def _build_advanced_tab(self):
+        """Build advanced settings tab (backups, firebase)"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+        
+        # Backups
+        backup_group = QGroupBox("Backups")
+        backup_layout = QVBoxLayout(backup_group)
+        
+        btn_backup_now = QPushButton("Crear backup ahora")
         btn_backup_now.clicked.connect(self._create_backup_now)
-        hlayout_backups.addWidget(btn_backup_now)
+        backup_layout.addWidget(btn_backup_now)
         
-        btn_open_backups = QPushButton("📂 Abrir carpeta de backups")
+        btn_open_backups = QPushButton("Abrir carpeta de backups")
         btn_open_backups.clicked.connect(self._open_backups_folder)
-        hlayout_backups.addWidget(btn_open_backups)
+        backup_layout.addWidget(btn_open_backups)
         
-        btn_firebase_config = QPushButton("🔥 Configurar Firebase")
+        layout.addWidget(backup_group)
+        
+        # Firebase
+        firebase_group = QGroupBox("Firebase")
+        firebase_layout = QVBoxLayout(firebase_group)
+        
+        btn_firebase_config = QPushButton("Configurar Firebase")
         btn_firebase_config.clicked.connect(self._configure_firebase)
-        hlayout_backups.addWidget(btn_firebase_config)
+        firebase_layout.addWidget(btn_firebase_config)
         
-        layout.addLayout(hlayout_backups)
-
-        # Botones de acción
-        btn_save = QPushButton("Guardar configuración")
-        btn_save.clicked.connect(self._save_settings)
-        btn_cancel = QPushButton("Cancelar")
-        btn_cancel.clicked.connect(self.reject)
-        hlayout_action = QHBoxLayout()
-        hlayout_action.addWidget(btn_cancel)
-        hlayout_action.addWidget(btn_save)
-        layout.addLayout(hlayout_action)
+        layout.addWidget(firebase_group)
+        layout.addStretch(1)
+        
+        return widget
+    
+    def _on_theme_changed(self, index):
+        """Handle theme change"""
+        if not hasattr(self, 'theme_manager'):
+            return
+        
+        theme_id = self.theme_selector.itemData(index)
+        if theme_id:
+            try:
+                # Apply theme immediately for preview
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app:
+                    self.theme_manager.apply_theme(app, theme_id)
+                    # Save theme preference
+                    self.theme_manager.save_and_apply_theme(theme_id)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Error al aplicar tema: {e}")
 
     def _load_companies(self):
         companies = self.logic.get_all_companies()
