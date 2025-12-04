@@ -648,3 +648,163 @@ class QuotationTab(QWidget, ItemsLookupMixin):
             })
 
         return items
+
+    # -------------------------
+    # Public API: Load quotation for editing
+    # -------------------------
+    def load_quotation_by_id(self, quotation_id: int) -> bool:
+        """
+        Load a quotation by ID for editing. Fetches header + items from backend
+        and populates all form fields.
+        
+        Args:
+            quotation_id: The ID of the quotation to load
+            
+        Returns:
+            True if successfully loaded, False otherwise
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not quotation_id:
+            logger.warning("[QuotationTab] load_quotation_by_id called with no ID")
+            return False
+        
+        try:
+            # Try to fetch the quotation header
+            quotation_data = None
+            for method_name in ("get_quotation_by_id", "get_cotizacion_by_id", "get_quotation"):
+                fn = getattr(self.logic, method_name, None)
+                if callable(fn):
+                    try:
+                        quotation_data = fn(int(quotation_id))
+                        if quotation_data:
+                            logger.info(f"[QuotationTab] Loaded quotation via {method_name}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"[QuotationTab] {method_name} failed: {e}")
+            
+            # Fallback: query directly if using SQLite
+            if not quotation_data and hasattr(self.logic, "conn") and self.logic.conn:
+                try:
+                    cur = self.logic.conn.cursor()
+                    cur.execute("SELECT * FROM quotations WHERE id = ?", (int(quotation_id),))
+                    row = cur.fetchone()
+                    if row:
+                        quotation_data = dict(row)
+                        logger.info("[QuotationTab] Loaded quotation via direct SQL query")
+                except Exception as e:
+                    logger.debug(f"[QuotationTab] Direct SQL query failed: {e}")
+            
+            if not quotation_data:
+                logger.warning(f"[QuotationTab] Quotation {quotation_id} not found")
+                return False
+            
+            # Fetch items
+            items = []
+            for method_name in ("get_quotation_items", "get_cotizacion_items"):
+                fn = getattr(self.logic, method_name, None)
+                if callable(fn):
+                    try:
+                        items = fn(int(quotation_id)) or []
+                        if items:
+                            logger.info(f"[QuotationTab] Loaded {len(items)} items via {method_name}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"[QuotationTab] {method_name} failed: {e}")
+            
+            # Fallback: query items directly
+            if not items and hasattr(self.logic, "conn") and self.logic.conn:
+                try:
+                    cur = self.logic.conn.cursor()
+                    cur.execute("SELECT * FROM quotation_items WHERE quotation_id = ?", (int(quotation_id),))
+                    rows = cur.fetchall()
+                    items = [dict(r) for r in rows]
+                    logger.info(f"[QuotationTab] Loaded {len(items)} items via direct SQL query")
+                except Exception as e:
+                    logger.debug(f"[QuotationTab] Direct items SQL query failed: {e}")
+            
+            # Populate form fields
+            self._populate_quotation_form(quotation_data, items)
+            
+            # Store the current quotation ID for updates
+            self._editing_quotation_id = int(quotation_id)
+            
+            logger.info(f"[QuotationTab] Successfully loaded quotation {quotation_id} for editing")
+            return True
+            
+        except Exception as e:
+            logger.exception(f"[QuotationTab] Error loading quotation {quotation_id}: {e}")
+            return False
+
+    def _populate_quotation_form(self, quotation_data: Dict[str, Any], items: List[Dict[str, Any]]):
+        """
+        Populate the quotation form fields with data from an existing quotation.
+        """
+        # Clear existing items
+        self.quotation_items_table.setRowCount(0)
+        
+        # Populate client fields
+        client_name = quotation_data.get("client_name") or quotation_data.get("third_party_name") or ""
+        client_rnc = quotation_data.get("client_rnc") or quotation_data.get("rnc") or ""
+        self.quotation_client_name.setText(client_name)
+        self.quotation_client_rnc.setText(client_rnc)
+        
+        # Populate dates
+        quotation_date_str = quotation_data.get("quotation_date") or quotation_data.get("date") or ""
+        if quotation_date_str:
+            try:
+                parts = quotation_date_str[:10].split("-")
+                if len(parts) == 3:
+                    y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                    self.quotation_date.setDate(QDate(y, m, d))
+            except Exception:
+                pass
+        
+        # Populate currency
+        currency = quotation_data.get("currency") or DEFAULT_CURRENCY
+        self.quotation_currency.setText(currency)
+        
+        # Populate notes
+        notes = quotation_data.get("notes") or ""
+        if notes:
+            self.quotation_notes.setPlainText(notes)
+            self.notes_box.setVisible(True)
+            self.notes_toggle.setChecked(True)
+            self.notes_toggle.setArrowType(Qt.ArrowType.DownArrow)
+        
+        # Populate ITBIS checkbox
+        apply_itbis = quotation_data.get("apply_itbis")
+        if apply_itbis is None:
+            itbis = float(quotation_data.get("itbis") or 0)
+            apply_itbis = itbis > 0.01
+        if hasattr(self, "apply_itbis_checkbox"):
+            self.apply_itbis_checkbox.setChecked(bool(apply_itbis))
+        
+        # Populate items
+        for item in items:
+            code = item.get("code") or item.get("item_code") or item.get("codigo") or ""
+            desc = item.get("description") or item.get("descripcion") or ""
+            unit = item.get("unit") or item.get("unidad") or DEFAULT_UNIT_FALLBACK
+            qty = float(item.get("quantity") or item.get("cantidad") or 0)
+            price = float(item.get("unit_price") or item.get("precio") or 0)
+            subtotal = qty * price
+            self._append_row(code, desc, unit, qty, price, subtotal)
+        
+        # Recalculate totals
+        self._recalculate_totals()
+        
+        # Refresh due date display
+        self._refresh_due_date_label()
+
+    def refresh(self):
+        """
+        Refresh the quotation tab state.
+        Called after external changes to ensure UI is up-to-date.
+        """
+        try:
+            self._refresh_due_date_label()
+            self._recalculate_totals()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"[QuotationTab] refresh error: {e}")

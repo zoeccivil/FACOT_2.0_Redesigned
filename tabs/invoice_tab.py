@@ -1033,3 +1033,182 @@ class InvoiceTab(QWidget):
                 except Exception: pass
                 break
             p = p.parent(); safety += 1
+
+    # -------------------------
+    # Public API: Load invoice for editing
+    # -------------------------
+    def load_invoice_by_id(self, invoice_id: int) -> bool:
+        """
+        Load an invoice by ID for editing. Fetches header + items from backend
+        and populates all form fields.
+        
+        Args:
+            invoice_id: The ID of the invoice to load
+            
+        Returns:
+            True if successfully loaded, False otherwise
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not invoice_id:
+            logger.warning("[InvoiceTab] load_invoice_by_id called with no ID")
+            return False
+        
+        try:
+            # Try to fetch the invoice header
+            invoice_data = None
+            for method_name in ("get_invoice_by_id", "get_factura_by_id", "get_invoice"):
+                fn = getattr(self.logic, method_name, None)
+                if callable(fn):
+                    try:
+                        invoice_data = fn(int(invoice_id))
+                        if invoice_data:
+                            logger.info(f"[InvoiceTab] Loaded invoice via {method_name}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"[InvoiceTab] {method_name} failed: {e}")
+            
+            # Fallback: query directly if using SQLite
+            if not invoice_data and hasattr(self.logic, "conn") and self.logic.conn:
+                try:
+                    cur = self.logic.conn.cursor()
+                    cur.execute("SELECT * FROM invoices WHERE id = ?", (int(invoice_id),))
+                    row = cur.fetchone()
+                    if row:
+                        invoice_data = dict(row)
+                        logger.info("[InvoiceTab] Loaded invoice via direct SQL query")
+                except Exception as e:
+                    logger.debug(f"[InvoiceTab] Direct SQL query failed: {e}")
+            
+            if not invoice_data:
+                logger.warning(f"[InvoiceTab] Invoice {invoice_id} not found")
+                return False
+            
+            # Fetch items
+            items = []
+            for method_name in ("get_invoice_items", "get_factura_items"):
+                fn = getattr(self.logic, method_name, None)
+                if callable(fn):
+                    try:
+                        items = fn(int(invoice_id)) or []
+                        if items:
+                            logger.info(f"[InvoiceTab] Loaded {len(items)} items via {method_name}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"[InvoiceTab] {method_name} failed: {e}")
+            
+            # Fallback: query items directly
+            if not items and hasattr(self.logic, "conn") and self.logic.conn:
+                try:
+                    cur = self.logic.conn.cursor()
+                    cur.execute("SELECT * FROM invoice_items WHERE invoice_id = ?", (int(invoice_id),))
+                    rows = cur.fetchall()
+                    items = [dict(r) for r in rows]
+                    logger.info(f"[InvoiceTab] Loaded {len(items)} items via direct SQL query")
+                except Exception as e:
+                    logger.debug(f"[InvoiceTab] Direct items SQL query failed: {e}")
+            
+            # Populate form fields
+            self._populate_invoice_form(invoice_data, items)
+            
+            # Store the current invoice ID for updates
+            self._editing_invoice_id = int(invoice_id)
+            
+            logger.info(f"[InvoiceTab] Successfully loaded invoice {invoice_id} for editing")
+            return True
+            
+        except Exception as e:
+            logger.exception(f"[InvoiceTab] Error loading invoice {invoice_id}: {e}")
+            return False
+
+    def _populate_invoice_form(self, invoice_data: Dict[str, Any], items: List[Dict[str, Any]]):
+        """
+        Populate the invoice form fields with data from an existing invoice.
+        """
+        from PyQt6.QtCore import QDate
+        
+        # Clear existing items
+        self.invoice_items_table.setRowCount(0)
+        
+        # Populate client fields
+        client_name = invoice_data.get("third_party_name") or invoice_data.get("client_name") or ""
+        client_rnc = invoice_data.get("rnc") or invoice_data.get("client_rnc") or ""
+        self.client_name.setText(client_name)
+        self.client_rnc.setText(client_rnc)
+        
+        # Populate NCF
+        ncf = invoice_data.get("invoice_number") or invoice_data.get("ncf") or ""
+        self.ncf_number_edit.setText(ncf)
+        # Make it editable for editing mode
+        self.ncf_number_edit.setReadOnly(False)
+        
+        # Populate dates
+        invoice_date_str = invoice_data.get("invoice_date") or invoice_data.get("date") or ""
+        if invoice_date_str:
+            try:
+                parts = invoice_date_str[:10].split("-")
+                if len(parts) == 3:
+                    y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                    self.invoice_date.setDate(QDate(y, m, d))
+            except Exception:
+                pass
+        
+        due_date_str = invoice_data.get("due_date") or ""
+        if due_date_str:
+            try:
+                parts = due_date_str[:10].split("-")
+                if len(parts) == 3:
+                    y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                    self.invoice_due_date.setDate(QDate(y, m, d))
+                    self._company_fixed_due = True
+            except Exception:
+                pass
+        
+        # Populate currency
+        currency = invoice_data.get("currency") or "RD$"
+        idx = self.currency_combo.findText(currency)
+        if idx >= 0:
+            self.currency_combo.setCurrentIndex(idx)
+        
+        # Populate exchange rate
+        exchange_rate = invoice_data.get("exchange_rate") or 1.0
+        self.exchange_rate_edit.setText(f"{float(exchange_rate):.4f}")
+        if currency != "RD$":
+            self.exchange_rate_edit.setVisible(True)
+        
+        # Populate invoice category
+        category = invoice_data.get("invoice_category") or "FACTURA PRIVADA"
+        idx = self.invoice_kind_combo.findText(category)
+        if idx >= 0:
+            self.invoice_kind_combo.setCurrentIndex(idx)
+        
+        # Populate ITBIS checkbox
+        itbis = float(invoice_data.get("itbis") or 0)
+        if hasattr(self, "apply_itbis_checkbox"):
+            self.apply_itbis_checkbox.setChecked(itbis > 0.01)
+        
+        # Populate items
+        for item in items:
+            code = item.get("code") or item.get("item_code") or item.get("codigo") or ""
+            desc = item.get("description") or item.get("descripcion") or ""
+            unit = item.get("unit") or item.get("unidad") or ""
+            qty = float(item.get("quantity") or item.get("cantidad") or 0)
+            price = float(item.get("unit_price") or item.get("precio") or 0)
+            subtotal = qty * price
+            self._append_row(code, desc, unit, qty, price, subtotal)
+        
+        # Recalculate totals
+        self._recalculate_invoice_totals()
+
+    def refresh(self):
+        """
+        Refresh the invoice tab state (e.g., due dates, sequences, caches).
+        Called after external changes to ensure UI is up-to-date.
+        """
+        try:
+            self._apply_default_due_date()
+            self._update_ncf_sequence()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"[InvoiceTab] refresh error: {e}")

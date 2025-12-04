@@ -618,6 +618,14 @@ class FirebaseDataAccess(DataAccess):
             print(f"[FIREBASE] Error deleting invoice {factura_id}: {e}")
             raise
     
+    def delete_invoice(self, invoice_id: int) -> bool:
+        """Alias for delete_factura for compatibility with history tabs."""
+        try:
+            self.delete_factura(invoice_id)
+            return True
+        except Exception:
+            return False
+    
     def delete_quotation(self, quotation_id: int) -> None:
         """Elimina una cotización y sus ítems."""
         try:
