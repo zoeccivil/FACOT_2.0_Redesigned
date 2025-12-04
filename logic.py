@@ -782,6 +782,29 @@ class LogicController:
             })
         return out
 
+    def get_invoice_by_id(self, invoice_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene una factura específica con sus ítems por ID.
+        
+        Args:
+            invoice_id: ID de la factura
+            
+        Returns:
+            Dict con datos de la factura incluyendo items, o None si no existe
+        """
+        cur = self.conn.cursor()
+        try:
+            cur.execute("SELECT * FROM invoices WHERE id = ?", (int(invoice_id),))
+            row = cur.fetchone()
+            if not row:
+                return None
+            invoice_data = dict(row)
+            invoice_data['items'] = self.get_invoice_items(invoice_id)
+            return invoice_data
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error getting invoice {invoice_id}: {e}")
+            return None
+
     def delete_factura(self, factura_id):
         """
         Elimina una factura y sus items.
@@ -870,6 +893,29 @@ class LogicController:
                 "unit": unit,
             })
         return out
+
+    def get_quotation_by_id(self, quotation_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Obtiene una cotización específica con sus ítems por ID.
+        
+        Args:
+            quotation_id: ID de la cotización
+            
+        Returns:
+            Dict con datos de la cotización incluyendo items, o None si no existe
+        """
+        cur = self.conn.cursor()
+        try:
+            cur.execute("SELECT * FROM quotations WHERE id = ?", (int(quotation_id),))
+            row = cur.fetchone()
+            if not row:
+                return None
+            quotation_data = dict(row)
+            quotation_data['items'] = self.get_quotation_items(quotation_id)
+            return quotation_data
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error getting quotation {quotation_id}: {e}")
+            return None
 
     def update_quotation(self, quotation_id, quotation_data, items):
         cur = self.conn.cursor()

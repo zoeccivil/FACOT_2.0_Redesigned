@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Tuple
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QWidget as QWidgetAlias, QFileDialog, QMessageBox, QHeaderView, QSizePolicy
+    QHBoxLayout, QWidget as QWidgetAlias, QFileDialog, QMessageBox, QHeaderView, QSizePolicy,
+    QMenu
 )
 from PyQt6.QtCore import QSize, Qt
 
@@ -121,6 +122,17 @@ class QuotationHistoryTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
+        
+        # Enable sorting
+        self.table.setSortingEnabled(True)
+        
+        # Enable context menu
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        
+        # Enable double-click for preview
+        self.table.doubleClicked.connect(self._on_table_double_click)
+        
         layout.addWidget(self.table)
 
         btn_refresh = QPushButton("Refrescar Historial")
@@ -552,3 +564,82 @@ class QuotationHistoryTab(QWidget):
             QMessageBox.information(self, "Excel", f"Cotización guardada como Excel en:\n{save_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar la cotización a Excel:\n{e}")
+
+    def _show_context_menu(self, position):
+        """Show context menu with quick actions."""
+        row = self.table.rowAt(position.y())
+        if row < 0:
+            return
+        
+        # Get the quotation record for this row
+        id_item = self.table.item(row, 0)
+        if not id_item:
+            return
+        
+        record = self._get_record_by_row(row)
+        if not record:
+            return
+        
+        menu = QMenu(self)
+        
+        # Preview action
+        preview_action = menu.addAction("👁 Vista Previa")
+        preview_action.triggered.connect(lambda: self._open_quotation_preview(record))
+        
+        # Edit action
+        edit_action = menu.addAction("✏️ Editar")
+        edit_action.triggered.connect(lambda: self._edit_quotation(record))
+        
+        menu.addSeparator()
+        
+        # Export PDF action
+        pdf_action = menu.addAction("📄 Exportar PDF")
+        pdf_action.triggered.connect(lambda: self._export_quotation_pdf(record))
+        
+        # Export Excel action
+        excel_action = menu.addAction("📊 Exportar Excel")
+        excel_action.triggered.connect(lambda: self._export_quotation_excel(record))
+        
+        menu.addSeparator()
+        
+        # Delete action
+        delete_action = menu.addAction("🗑 Eliminar")
+        delete_action.triggered.connect(lambda: self._delete_quotation(record))
+        
+        menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def _on_table_double_click(self, index):
+        """Handle double-click on table row to open preview."""
+        row = index.row()
+        record = self._get_record_by_row(row)
+        if record:
+            self._open_quotation_preview(record)
+
+    def _get_record_by_row(self, row: int) -> Dict[str, Any]:
+        """Reconstruct record dict from table row data."""
+        if row < 0 or row >= self.table.rowCount():
+            return {}
+        
+        try:
+            record = {
+                'id': self.table.item(row, 0).text() if self.table.item(row, 0) else '',
+                'quotation_date': self.table.item(row, 1).text() if self.table.item(row, 1) else '',
+                'client_name': self.table.item(row, 2).text() if self.table.item(row, 2) else '',
+                'client_rnc': self.table.item(row, 3).text() if self.table.item(row, 3) else '',
+                'currency': self.table.item(row, 4).text() if self.table.item(row, 4) else '',
+                'total_amount': self.table.item(row, 5).text().replace(',', '') if self.table.item(row, 5) else '0',
+                'notes': self.table.item(row, 6).text() if self.table.item(row, 6) else '',
+                'status': self.table.item(row, 7).text() if self.table.item(row, 7) else '',
+            }
+            # Try to convert ID and total_amount to proper types
+            try:
+                record['id'] = int(record['id'])
+            except (ValueError, TypeError):
+                pass
+            try:
+                record['total_amount'] = float(record['total_amount'])
+            except (ValueError, TypeError):
+                record['total_amount'] = 0.0
+            return record
+        except Exception:
+            return {}

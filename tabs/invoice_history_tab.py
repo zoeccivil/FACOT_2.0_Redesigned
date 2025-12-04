@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Tuple, Set
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QWidget as QWidgetAlias, QFileDialog, QMessageBox, QHeaderView, QSizePolicy
+    QHBoxLayout, QWidget as QWidgetAlias, QFileDialog, QMessageBox, QHeaderView, QSizePolicy,
+    QMenu
 )
 from PyQt6.QtCore import QSize, Qt, QDate
 
@@ -128,6 +129,17 @@ class InvoiceHistoryTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
+        
+        # Enable sorting
+        self.table.setSortingEnabled(True)
+        
+        # Enable context menu
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        
+        # Enable double-click for preview
+        self.table.doubleClicked.connect(self._on_table_double_click)
+        
         layout.addWidget(self.table)
 
         btn_refresh = QPushButton("Refrescar Historial")
@@ -314,6 +326,137 @@ class InvoiceHistoryTab(QWidget):
                     self.table.setCellWidget(row, c, widget)
                     break
 
+    def _resolve_company_and_template(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Resolve company data and template for preview/export."""
+        company = self.get_current_company() or {}
+        tpl = {}
+        try:
+            tpl = load_template(int(company.get('id')))
+        except Exception:
+            tpl = {}
+        company_data = {
+            "id": company.get('id'),
+            "name": company.get('name'),
+            "rnc": company.get('rnc') or company.get('rnc_number') or "",
+            "address_line1": company.get('address') or company.get('address_line1') or "",
+            "address_line2": company.get('address_line2') or "",
+            "phone": company.get('phone') or company.get('telefono') or "",
+            "email": company.get('email') or company.get('correo') or "",
+            "logo_path": ""
+        }
+        logo_rel = tpl.get("logo_path") or company.get("logo_path") or ""
+        company_data["logo_path"] = resolve_logo_uri(logo_rel) or ""
+        return company_data, tpl
+
+    def _get_record_items(self, record: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get items for an invoice record, fetching from backend if needed."""
+        items = record.get('items') or record.get('details') or []
+        if not items and hasattr(self.logic, "get_invoice_items"):
+            try:
+                items = self.logic.get_invoice_items(record.get('id'))
+            except Exception:
+                items = []
+        normalized = []
+        for it in items:
+            normalized.append({
+                "code": it.get("code") or it.get("item_code") or it.get("codigo") or "",
+                "description": it.get("description") or it.get("descripcion") or "",
+                "unit": it.get("unit") or it.get("unidad") or "",
+                "quantity": float(it.get("quantity", it.get("cantidad", 0)) or 0),
+                "unit_price": float(it.get("unit_price", it.get("precio", 0)) or 0)
+            })
+        return normalized
+
+    def _build_display_invoice_number(self, company: Dict[str, Any], ncf: str, prefix_label: str = "FACT", last_digits: int = 6) -> str:
+        """Build a display-friendly invoice number."""
+        initials = self._company_initials(company.get('name', 'COMPANY'))
+        digits = ''.join(ch for ch in (ncf or "") if ch.isdigit())
+        tail = digits[-last_digits:] if digits else ''
+        if tail:
+            return f"{prefix_label}-{initials}-{tail}"
+        return f"{prefix_label}-{initials}-{ncf or ''}"
+
+    def _company_initials(self, company_name: str, max_chars: int = 6) -> str:
+        """Extract company initials from name."""
+        if not company_name:
+            return "COMP"
+        parts = [p for p in company_name.replace(',', ' ').split() if p]
+        if len(parts) == 1:
+            s = parts[0][:max_chars].upper()
+            return ''.join([c for c in s if c.isalnum()])[:max_chars]
+        initials = ''.join([p[0].upper() for p in parts[:3]])
+        return initials[:max_chars]
+
+    def _export_invoice_pdf(self, record: Dict[str, Any]):
+        """Export invoice to PDF."""
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
+
+        apply_itbis = record.get("apply_itbis")
+        if apply_itbis is None:
+            try:
+                itbis = float(record.get("itbis", 0) or 0)
+                apply_itbis = (itbis > 0.01)
+            except Exception:
+                apply_itbis = True
+
+        invoice_payload = {
+            "company_id": record.get("company_id", company.get('id')),
+            "company_name": company.get('name', ''),
+            "invoice_date": record.get("invoice_date", ""),
+            "invoice_number": record.get("invoice_number") or record.get("ncf") or "",
+            "client_name": record.get("third_party_name") or record.get("client_name") or "",
+            "client_rnc": record.get("rnc") or record.get("client_rnc") or "",
+            "apply_itbis": apply_itbis,
+        }
+        items = self._get_record_items(record)
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Factura como PDF", f"factura_{invoice_payload.get('invoice_number','')}.pdf", "PDF Files (*.pdf)")
+        if not fn:
+            return
+        save_path = fn if fn.lower().endswith(".pdf") else fn + ".pdf"
+        try:
+            export_invoice_pdf_with_template(invoice_payload, items, save_path, company_name=company.get('name',''))
+            QMessageBox.information(self, "PDF", f"Factura guardada como PDF en:\n{save_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo exportar la factura a PDF:\n{e}")
+
+    def _export_invoice_excel(self, record: Dict[str, Any]):
+        """Export invoice to Excel."""
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
+
+        apply_itbis = record.get("apply_itbis")
+        if apply_itbis is None:
+            try:
+                itbis = float(record.get("itbis", 0) or 0)
+                apply_itbis = (itbis > 0.01)
+            except Exception:
+                apply_itbis = True
+
+        invoice_payload = {
+            "company_id": record.get("company_id", company.get('id')),
+            "company_name": company.get('name', ''),
+            "invoice_date": record.get("invoice_date", ""),
+            "invoice_number": record.get("invoice_number") or record.get("ncf") or "",
+            "client_name": record.get("third_party_name") or record.get("client_name") or "",
+            "client_rnc": record.get("rnc") or record.get("client_rnc") or "",
+            "apply_itbis": apply_itbis,
+        }
+        items = self._get_record_items(record)
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Factura como Excel", f"factura_{invoice_payload.get('invoice_number','')}.xlsx", "Excel Files (*.xlsx)")
+        if not fn:
+            return
+        save_path = fn if fn.lower().endswith(".xlsx") else fn + ".xlsx"
+        try:
+            export_invoice_excel_with_template(invoice_payload, items, save_path, company_name=company.get('name',''))
+            QMessageBox.information(self, "Excel", f"Factura guardada como Excel en:\n{save_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo exportar la factura a Excel:\n{e}")
+
     def _open_invoice_preview(self, record: Dict[str, Any]):
         company_data, tpl = self._resolve_company_and_template()
         inv_type = record.get("invoice_type") or record.get("type") or "FACTURA"
@@ -490,3 +633,81 @@ class InvoiceHistoryTab(QWidget):
                 safety += 1
         except Exception:
             pass
+
+    def _show_context_menu(self, position):
+        """Show context menu with quick actions."""
+        row = self.table.rowAt(position.y())
+        if row < 0:
+            return
+        
+        # Get the invoice record for this row
+        id_item = self.table.item(row, 0)
+        if not id_item:
+            return
+        
+        record = self._get_record_by_row(row)
+        if not record:
+            return
+        
+        menu = QMenu(self)
+        
+        # Preview action
+        preview_action = menu.addAction("👁 Vista Previa")
+        preview_action.triggered.connect(lambda: self._open_invoice_preview(record))
+        
+        # Edit action
+        edit_action = menu.addAction("✏️ Editar")
+        edit_action.triggered.connect(lambda: self._edit_invoice(record))
+        
+        menu.addSeparator()
+        
+        # Export PDF action
+        pdf_action = menu.addAction("📄 Exportar PDF")
+        pdf_action.triggered.connect(lambda: self._export_invoice_pdf(record))
+        
+        # Export Excel action
+        excel_action = menu.addAction("📊 Exportar Excel")
+        excel_action.triggered.connect(lambda: self._export_invoice_excel(record))
+        
+        menu.addSeparator()
+        
+        # Delete action
+        delete_action = menu.addAction("🗑 Eliminar")
+        delete_action.triggered.connect(lambda: self._delete_invoice(record))
+        
+        menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def _on_table_double_click(self, index):
+        """Handle double-click on table row to open preview."""
+        row = index.row()
+        record = self._get_record_by_row(row)
+        if record:
+            self._open_invoice_preview(record)
+
+    def _get_record_by_row(self, row: int) -> Dict[str, Any]:
+        """Reconstruct record dict from table row data."""
+        if row < 0 or row >= self.table.rowCount():
+            return {}
+        
+        try:
+            record = {
+                'id': self.table.item(row, 0).text() if self.table.item(row, 0) else '',
+                'invoice_date': self.table.item(row, 1).text() if self.table.item(row, 1) else '',
+                'invoice_number': self.table.item(row, 2).text() if self.table.item(row, 2) else '',
+                'third_party_name': self.table.item(row, 3).text() if self.table.item(row, 3) else '',
+                'rnc': self.table.item(row, 4).text() if self.table.item(row, 4) else '',
+                'currency': self.table.item(row, 5).text() if self.table.item(row, 5) else '',
+                'total_amount': self.table.item(row, 6).text().replace(',', '') if self.table.item(row, 6) else '0',
+            }
+            # Try to convert ID and total_amount to proper types
+            try:
+                record['id'] = int(record['id'])
+            except (ValueError, TypeError):
+                pass
+            try:
+                record['total_amount'] = float(record['total_amount'])
+            except (ValueError, TypeError):
+                record['total_amount'] = 0.0
+            return record
+        except Exception:
+            return {}
