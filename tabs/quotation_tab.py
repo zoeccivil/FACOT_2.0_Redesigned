@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import os
 import datetime
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
@@ -663,7 +664,6 @@ class QuotationTab(QWidget, ItemsLookupMixin):
         Returns:
             True if successfully loaded, False otherwise
         """
-        import logging
         logger = logging.getLogger(__name__)
         
         if not quotation_id:
@@ -806,5 +806,4 @@ class QuotationTab(QWidget, ItemsLookupMixin):
             self._refresh_due_date_label()
             self._recalculate_totals()
         except Exception as e:
-            import logging
             logging.getLogger(__name__).debug(f"[QuotationTab] refresh error: {e}")

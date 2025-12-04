@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import logging
 from typing import Dict, Any, List, Any as AnyType
 from datetime import datetime as dt
 from PyQt6.QtWidgets import (
@@ -1048,7 +1049,6 @@ class InvoiceTab(QWidget):
         Returns:
             True if successfully loaded, False otherwise
         """
-        import logging
         logger = logging.getLogger(__name__)
         
         if not invoice_id:
@@ -1210,5 +1210,4 @@ class InvoiceTab(QWidget):
             self._apply_default_due_date()
             self._update_ncf_sequence()
         except Exception as e:
-            import logging
             logging.getLogger(__name__).debug(f"[InvoiceTab] refresh error: {e}")
